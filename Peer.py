@@ -95,6 +95,9 @@ class Peer():
         if(self.peer_id == "peer3"):
             self.send_message_to_sequencer("Hello from peer3")
 
+        if(self.peer_id == "peer2"):
+            self.send_message_to_sequencer("Hello from peer2")
+
         time.sleep(5)  # WAIT FOR MESSAGES TO BE PROCESSED
 
         self.print_status()
@@ -105,22 +108,30 @@ class Peer():
             self.udp_thread.join()
 
     def send_message_to_sequencer(self, message):
-        print(f"[Node {self.peer_id}] Sending: '{message}'")
-        # In a real system, this goes to the sequencer first
-        #wraps message with sequence number
-        #send message to sequencer peer
-        peer_info = self.groupView.get(self.sequencer_peer_id)
-        message = f"SEQUENCER_REQUEST:{message}"
-        if self.sequencer_peer_id:
-            try:
-                if self.sequencer_peer_id not in self.connection_dict:
-                    self.send_connection_request(peer_info['address'], peer_info['port'], self.sequencer_peer_id)
-                self.send_message(self.sequencer_peer_id, message)
-                print(f"Sent sequencer request to {self.sequencer_peer_id}: {message}")
-            except Exception as e:
-                    print(f"Failed to send updated successor information to {self.sequencer_peer_id}: {e}")
+        if self.sequencer_peer_id == self.peer_id:
+            print(f"[Node {self.peer_id}] I am the sequencer, processing message directly: '{message}'")
+            with self.lock:
+                self.sequencer_sequence_number += 1
+                ordered_msg = (self.sequencer_sequence_number, message)
+                self.multicast_message_to_group(ordered_msg, from_peer_id=self.peer_id)
+            return
         else:
-            print("Sequencer peer ID unknown, cannot send message.")
+            print(f"[Node {self.peer_id}] Sending: '{message}'")
+            # In a real system, this goes to the sequencer first
+            #wraps message with sequence number
+            #send message to sequencer peer
+            peer_info = self.groupView.get(self.sequencer_peer_id)
+            message = f"SEQUENCER_REQUEST:{message}"
+            if self.sequencer_peer_id:
+                try:
+                    if self.sequencer_peer_id not in self.connection_dict:
+                        self.send_connection_request(peer_info['address'], peer_info['port'], self.sequencer_peer_id)
+                    self.send_message(self.sequencer_peer_id, message)
+                    print(f"Sent sequencer request to {self.sequencer_peer_id}: {message}")
+                except Exception as e:
+                        print(f"Failed to send updated successor information to {self.sequencer_peer_id}: {e}")
+            else:
+                print("Sequencer peer ID unknown, cannot send message.")
         
     def process_buffer(self):
         """ The 'Hold-back Buffer' Logic """
