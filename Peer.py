@@ -46,6 +46,7 @@ class Peer():
         self.delivered_messages = []
         self.multicast_thread_active = False
         self.view_id = 0  # To track changes in group view
+        self.peer_last_heartbeat = {} # Map peer_id -> last_ack_time
 
 
     def __str__(self):
@@ -82,10 +83,10 @@ class Peer():
             time.sleep(5)
         
 
-        # # Start fault tolerance threads
+        # Start fault tolerance threads
         # self.start_leader_check_thread()
-        # if self.isGroupLeader:
-        #     self.start_heartbeat_thread()
+        if self.isGroupLeader:
+            self.start_heartbeat_thread()
 
         time.sleep(5)  # WAIT FOR THE OTHER PEERS TO SETTLE
 
@@ -196,10 +197,14 @@ class Peer():
         if peer_key in self.connection_dict:
             conn = self.connection_dict[peer_key]
             while True:
+                try:
                     data = conn.recv(buffer_size)
                     if not data:
                         print(f"Connection closed by {peer_key}")
                         break
+                except Exception as e:
+                    print(f"Connection error with {peer_key}: {e}")
+                    break
                     message = data.decode()
                     print(f"Received from {peer_key}: {message}")
                     if message.startswith("SUCCESSOR_INFORMATION:"):
@@ -216,8 +221,9 @@ class Peer():
                         self.last_leader_heartbeat = time.time()
                         self.send_message(peer_key, "HEARTBEAT_ACK")
                     elif message == "HEARTBEAT_ACK":
-                        # Leader received ack, no action needed
-                        pass
+                        # Leader received ack, update timestamp
+                        print(f"Received HEARTBEAT_ACK from {peer_key}")
+                        self.peer_last_heartbeat[peer_key] = time.time()
                     elif message.startswith("VIEW_CHANGE:"):
                         print(f"Hurrah Received VIEW_CHANGE message: {message} my peer id is {self.peer_id}")
                         parts = message.split("VIEW_CHANGE:")[1].split("-", 2)
@@ -298,6 +304,10 @@ class Peer():
     def create_multicast_listener(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, 'SO_REUSEPORT'):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        else:
+            print("Warning: SO_REUSEPORT not supported on this platform.")
         sock.bind(('', MCAST_PORT))
         mreq = struct.pack(
             "4sl",
@@ -357,8 +367,11 @@ class Peer():
 
     def listen_for_broadcasts(self, buffer_size=1024):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        udp_sock.bind(('127.0.0.1', BROADCAST_PORT))
+        if hasattr(socket, 'SO_REUSEPORT'):
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        else:
+            print("Warning: SO_REUSEPORT not supported on this platform.")
+        udp_sock.bind(('0.0.0.0', BROADCAST_PORT))
         print(f"Listening for broadcasts on port {BROADCAST_PORT}")
         while True:
             data, addr = udp_sock.recvfrom(buffer_size)
@@ -378,6 +391,7 @@ class Peer():
                             'port': peer_port,
                             'role': 'member'   
                         }
+                        self.peer_last_heartbeat[new_peer_id] = time.time() # Initialize heartbeat tracking
                         print(f"Updated group view: {self.groupView}")
 
                         #add to peer successor list
@@ -463,24 +477,39 @@ class Peer():
         while True:
             time.sleep(self.heartbeat_interval)
             if self.isGroupLeader:
+                current_time = time.time()
+                # Create a copy of keys to avoid runtime error during modification if a peer fails
                 for peer_id in list(self.groupView.keys()):
                     if peer_id != self.peer_id:
+                        # Check for timeout
+                        last_ack = self.peer_last_heartbeat.get(peer_id, current_time)
+                        if current_time - last_ack > self.heartbeat_timeout:
+                            print(f"Peer {peer_id} timed out! Last ACK: {last_ack}, Current: {current_time}")
+                            self.handle_peer_failure(peer_id)
+                            continue
+
                         try:
                             self.send_message(peer_id, "HEARTBEAT")
                         except Exception as e:
                             print(f"Failed to send heartbeat to {peer_id}: {e}")
+                            # logic handled by timeout now, but immediate failure can also be handled
                             self.handle_peer_failure(peer_id)
 
     def handle_peer_failure(self, peer_id):
         if peer_id in self.groupView:
             del self.groupView[peer_id]
+            if peer_id in self.peer_last_heartbeat:
+                del self.peer_last_heartbeat[peer_id]
             if peer_id in self.orderedPeerList:
                 self.orderedPeerList.remove(peer_id)
             print(f"Peer {peer_id} failed, updated group: {self.groupView}, ordered: {self.orderedPeerList}")
+            print(f"Peer {peer_id} failed, updated group: {self.groupView}, ordered: {self.orderedPeerList}")
+            
+            # Update view ID
+            self.view_id += 1
+            
             # Send updated successor info to remaining peers
-            for pid in self.orderedPeerList:
-                if pid != self.peer_id:
-                    self.send_successor_information(pid)
+            self.multicast_groupviewandorderedlist_update()
 
     def start_leader_check_thread(self):
         self.leader_check_thread = threading.Thread(target=self.check_leader_heartbeat, daemon=True)

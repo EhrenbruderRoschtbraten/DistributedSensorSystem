@@ -52,16 +52,19 @@ if __name__ == '__main__':
         target=peer1stuff,
         args=(peer_id1, peer1address, peer1port)
     )
+    process1.daemon = True
 
     process2 = multiprocessing.Process(
         target=peer2stuff,
         args=(peer_id2, peer2address, peer2port)
     )
+    process2.daemon = True
 
     process3 = multiprocessing.Process(
         target=peer3stuff,
         args=(peer_id3, peer3address, peer3port)
     )
+    process3.daemon = True
 
     process2.start()
     time.sleep(5)  # Ensure peer2 starts before peer1
