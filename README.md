@@ -49,8 +49,8 @@ python .\test_leader_election.py
 ```
 
 ## Logs
-- Tests redirect per-peer output to `{peer_id}_log.txt` (e.g., `peer2_log.txt`).
-- Look for `Received COORDINATOR announcement: <peer>` or `became the Group Leader via election` to verify election.
+- Tests redirect per-peer output to `logs/{peer_id}_log.txt` (e.g., `logs/peer2_log.txt`).
+- Look for `Received COORDINATOR announcement: <peer>` or `became the Group Leader via election` in these log files to verify election.
 
 ## Windows Notes
 - You may see warnings about `SO_REUSEPORT` not being supported.
