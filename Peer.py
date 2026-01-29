@@ -531,7 +531,7 @@ class Peer():
             self.multicast_groupviewandorderedlist_update()
 
             # If the failed peer was the leader, start election
-            if self.leader_id == peer_id or (self.isGroupLeader and self.peer_id == peer_id):
+            if self.leader_id == peer_id:
                 print("Leader failure detected, initiating bully election.")
                 self.start_bully_election()
 
