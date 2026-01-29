@@ -635,6 +635,8 @@ class Peer():
         self.isGroupLeader = True
         self.leader_id = self.peer_id
         self.sequencer_peer_id = self.peer_id
+        # Initialize sequencer sequence number when this peer becomes leader
+        self.sequencer_sequence_number = 0
         self.start_heartbeat_thread()
         message = f"COORDINATOR:{self.peer_id}"
         for pid, info in self.groupView.items():
