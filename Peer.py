@@ -604,7 +604,7 @@ class Peer():
             # Become leader
             print(f"No OK received. {self.peer_id} becomes leader.")
             self.announce_coordinator()
-        # else: wait for coordinator announcement; if none arrives, retry election after timeout
+        # else: a higher-priority peer responded; this peer now passively waits for a COORDINATOR message handled elsewhere (no retry logic here)
 
         # Reset election flag after some grace
         def reset_flag():
