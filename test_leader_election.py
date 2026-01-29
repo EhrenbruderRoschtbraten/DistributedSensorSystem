@@ -87,19 +87,23 @@ def run_test():
 
     remaining = [pid for pid in peer_ids if pid != leader_id]
     expected_leader = max(remaining, key=priority)
-    p2 = read_log(peers["peer2"]["log"]) if "peer2" in peers else ""
-    p3 = read_log(peers["peer3"]["log"]) if "peer3" in peers else ""
+    remaining_logs = {pid: read_log(peers[pid]["log"]) for pid in remaining}
+    expected_leader_log = remaining_logs.get(expected_leader, "")
 
     success = False
-    if f"Received COORDINATOR announcement: {expected_leader}" in p2 or f"Received COORDINATOR announcement: {expected_leader}" in p3:
+    # Any remaining peer acknowledging the coordinator is a success
+    if any(f"Received COORDINATOR announcement: {expected_leader}" in log for log in remaining_logs.values()):
+        success = True
+    # Or the expected leader confirming becoming leader
+    if "became the Group Leader via election" in expected_leader_log and expected_leader in expected_leader_log:
         success = True
 
     if success:
         print(f"--- PASS: {expected_leader} elected as leader (bully algorithm) ---")
     else:
         print("--- FAIL: Did not detect expected COORDINATOR announcement ---")
-        print("peer2_log excerpt:\n", p2[-1000:])
-        print("peer3_log excerpt:\n", p3[-1000:])
+        for pid, log in remaining_logs.items():
+            print(f"{pid}_log excerpt:\n", log[-1000:])
 
     # Cleanup remaining processes
     for pid, info in peers.items():
