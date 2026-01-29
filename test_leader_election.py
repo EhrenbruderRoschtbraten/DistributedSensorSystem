@@ -47,6 +47,8 @@ def run_test():
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     return f.read()
         except Exception:
+            # Intentionally ignore any log read errors (e.g., log not yet created)
+            # and fall through to return an empty string so the test can retry.
             pass
         return ""
 
