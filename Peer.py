@@ -7,6 +7,10 @@ import time
 import queue
 import json
 import struct
+import os
+import csv
+import random
+from datetime import datetime
 
 
 BROADCAST_PORT = 9999  # Dedicated port for UDP broadcasts
@@ -49,6 +53,11 @@ class Peer():
         self.peer_last_heartbeat = {} # Map peer_id -> last_ack_time
         self.election_timeout = 5
         self.received_ok = False
+        # Sensor data config
+        self.sensor_interval_seconds = 15
+        self.sensor_thread = None
+        # Each peer writes into its own data directory for replication
+        self.data_dir = os.path.join(os.getcwd(), "data", self.peer_id)
 
 
     def __str__(self):
@@ -104,6 +113,12 @@ class Peer():
         time.sleep(5)  # WAIT FOR MESSAGES TO BE PROCESSED
 
         self.print_status()
+        # Start mocked sensor thread once part of network and multicast ready
+        try:
+            if self.sensor_thread is None:
+                self.start_sensor_thread()
+        except Exception as e:
+            print(f"Failed to start sensor thread: {e}")
         # Keep the peer running by joining the threads
         if self.tcp_thread:
             self.tcp_thread.join()
@@ -147,6 +162,10 @@ class Peer():
                 self.incoming_queue.get() 
                 self.delivered_messages.append(msg)
                 print(f"  ==> [Node {self.peer_id}] Delivered #{seq_id}: {msg}")
+                try:
+                    self.handle_ordered_payload(msg, seq_id)
+                except Exception as e:
+                    print(f"Error handling ordered payload: {e}")
                 self.expected_seq += 1
             else:
                 # Out of order! Gap detected. Wait for the missing message.
@@ -349,6 +368,76 @@ class Peer():
 
             self.incoming_queue.put(message_content)
             self.process_buffer()
+
+    # -------------------- Sensor Data (Mocked) --------------------
+    def start_sensor_thread(self):
+        # Only start once we are part of the network and sequencer known
+        if not self.partOfNetwork or not self.sequencer_peer_id:
+            print("Sensor thread deferred until network ready.")
+            # Retry shortly to avoid missing initialization race
+            threading.Timer(3.0, self.start_sensor_thread).start()
+            return
+        if self.sensor_thread and self.sensor_thread.is_alive():
+            return
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.sensor_thread = threading.Thread(target=self._sensor_loop, daemon=True)
+        self.sensor_thread.start()
+        print(f"Sensor thread started for {self.peer_id} with interval {self.sensor_interval_seconds}s")
+
+    def _sensor_loop(self):
+        # Small random initial delay to de-sync sends across peers
+        time.sleep(random.uniform(0, 2))
+        while True:
+            try:
+                measurement = self.generate_mock_measurement()
+                payload = self.encode_measurement(measurement)
+                self.send_message_to_sequencer(payload)
+            except Exception as e:
+                print(f"Sensor loop error: {e}")
+            time.sleep(self.sensor_interval_seconds)
+
+    def generate_mock_measurement(self):
+        # Simple random walk around typical indoor values
+        temp = round(random.uniform(19.0, 24.0), 2)        # Celsius
+        humidity = round(random.uniform(30.0, 60.0), 2)    # %
+        pressure = round(random.uniform(990.0, 1030.0), 2) # hPa
+        ts = datetime.utcnow().isoformat() + "Z"
+        return {
+            "sensor_id": self.peer_id,
+            "timestamp": ts,
+            "temperature": temp,
+            "humidity": humidity,
+            "pressure": pressure,
+        }
+
+    def encode_measurement(self, m):
+        # Totally ordered payload format
+        # DATA|sensor_id|timestamp|temperature|humidity|pressure
+        return f"DATA|{m['sensor_id']}|{m['timestamp']}|{m['temperature']}|{m['humidity']}|{m['pressure']}"
+
+    def handle_ordered_payload(self, payload, seq_id):
+        # Handle only our data messages; ignore other demo strings
+        if isinstance(payload, str) and payload.startswith("DATA|"):
+            parts = payload.split("|")
+            if len(parts) != 6:
+                print(f"Malformed DATA payload: {payload}")
+                return
+            _, sensor_id, ts, temp, hum, pres = parts
+            self.write_measurement_csv(sensor_id, ts, temp, hum, pres, seq_id)
+
+    def write_measurement_csv(self, sensor_id, ts, temp, hum, pres, seq_id):
+        # One CSV per sensor in this peer's directory (replicated across peers)
+        file_path = os.path.join(self.data_dir, f"{sensor_id}.csv")
+        file_exists = os.path.exists(file_path)
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            with open(file_path, mode='a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(["sequence", "timestamp", "sensor_id", "temperature_c", "humidity_pct", "pressure_hpa"]) 
+                writer.writerow([seq_id, ts, sensor_id, temp, hum, pres])
+        except Exception as e:
+            print(f"Failed to write CSV for {sensor_id}: {e}")
 
 
     def create_multicast_threads(self):
