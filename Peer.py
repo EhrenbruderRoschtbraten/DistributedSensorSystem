@@ -264,7 +264,9 @@ class Peer():
                     if(self.multicast_thread_active==False):
                         self.create_multicast_threads()
                     # Start leader heartbeat monitoring as a member
-                    if not self.isGroupLeader and self.leader_check_thread is None:
+                    leader_thread = getattr(self, "leader_check_thread", None)
+                    if (not self.isGroupLeader and
+                        (leader_thread is None or not leader_thread.is_alive())):
                         self.start_leader_check_thread()
                 elif message.startswith("SEQUENCER_REQUEST:"):
                     if self.sequencer_peer_id != self.peer_id:
