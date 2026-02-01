@@ -40,15 +40,15 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 ## Run
 From the project root:
 
-```powershell
+```bash
 # Start three peers
-python .\main_multithreading.py
+python main_multithreading.py
 
 # Fail-stop test (kills a non-leader and checks membership updates)
-python .\test_fault_tolerance.py
+python test_fault_tolerance.py
 
 # Bully leader election test (detects current leader, kills it, verifies new leader)
-python .\test_leader_election.py
+python test_leader_election.py
 ```
 
 ## Logs
