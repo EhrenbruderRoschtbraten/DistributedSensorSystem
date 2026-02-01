@@ -46,10 +46,10 @@ def run_test():
             if os.path.exists(path):
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     return f.read()
-        except Exception:
-            # Intentionally ignore any log read errors (e.g., log not yet created)
-            # and fall through to return an empty string so the test can retry.
-            pass
+        except Exception as exc:
+            # Intentionally allow the test to proceed if the log cannot be read,
+            # but log the error so that real I/O issues are visible during debugging.
+            print(f"Warning: failed to read log file '{path}': {exc}", file=sys.stderr)
         return ""
 
     leader_id = None
