@@ -2,7 +2,6 @@
 import multiprocessing
 import time
 import os
-import signal
 import Peer
 import Peer_utils
 import identity
@@ -24,7 +23,7 @@ def run_test():
     processes = []
     
     # Clean up previous runs
-    os.system("pkill -9 -f python3")
+    # Cross-platform: no-op cleanup for Windows
     time.sleep(1)
 
     # 2. Start Peers
@@ -48,9 +47,9 @@ def run_test():
 
     # 3. Simulate Crash
     target_peer_index = 2 # peer3
-    target_pid = processes[target_peer_index].pid
-    print(f"--- CRASHING peer3 (PID {target_pid}) ---")
-    os.kill(target_pid, signal.SIGKILL)
+    target_proc = processes[target_peer_index]
+    print(f"--- CRASHING peer3 (PID {target_proc.pid}) ---")
+    target_proc.terminate()
     
     print("--- Waiting for detection timeout (25s) ---")
     time.sleep(25)
