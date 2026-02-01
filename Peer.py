@@ -165,7 +165,7 @@ class Peer():
                 try:
                     self.handle_ordered_payload(msg, seq_id)
                 except Exception as e:
-                    print(f"Error handling ordered payload: {e}")
+                    print(f"Error handling ordered payload (seq_id={seq_id}, msg={msg!r}): {type(e).__name__}: {e}")
                 self.expected_seq += 1
             else:
                 # Out of order! Gap detected. Wait for the missing message.
