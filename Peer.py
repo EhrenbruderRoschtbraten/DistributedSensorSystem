@@ -681,13 +681,14 @@ class Peer():
             except Exception as e:
                 print(f"Failed to send ELECTION to {pid}: {e}")
 
-        # Wait for OK
-        start_wait = time.time()
-        while time.time() - start_wait < self.election_timeout:
-            if self.received_ok:
-                print("Received OK from higher peer, waiting for COORDINATOR.")
-                break
-            time.sleep(0.2)
+        # Wait for OK only if there are higher-priority peers to respond
+        if higher_peers:
+            start_wait = time.time()
+            while time.time() - start_wait < self.election_timeout:
+                if self.received_ok:
+                    print("Received OK from higher peer, waiting for COORDINATOR.")
+                    break
+                time.sleep(0.2)
 
         if not self.received_ok:
             # Become leader
