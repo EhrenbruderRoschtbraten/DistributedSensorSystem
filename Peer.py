@@ -746,7 +746,10 @@ class Peer():
         self.sequencer_peer_id = self.peer_id
         # Initialize sequencer sequence number when this peer becomes leader
         self._initialize_sequencer_sequence_number()
-        self.start_heartbeat_thread()
+        # Start heartbeat thread only if one is not already running
+        heartbeat_thread = getattr(self, "heartbeat_thread", None)
+        if heartbeat_thread is None or not heartbeat_thread.is_alive():
+            self.start_heartbeat_thread()
         message = f"COORDINATOR:{self.peer_id}"
         for pid, info in self.groupView.items():
             if pid == self.peer_id:
