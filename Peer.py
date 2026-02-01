@@ -715,12 +715,8 @@ class Peer():
             # Start own election if not already
             self.start_bully_election()
         else:
-            print(f"{self.peer_id} received ELECTION from {sender_id}. Lower priority; acknowledging OK.")
-            try:
-                self.ensure_connection(sender_id)
-                self.send_message(sender_id, "OK")
-            except Exception as e:
-                print(f"Failed to send OK to {sender_id}: {e}")
+            # Lower or equal priority: per bully algorithm, do not send OK
+            print(f"{self.peer_id} received ELECTION from {sender_id}. Lower or equal priority; ignoring.")
 
     def _initialize_sequencer_sequence_number(self):
         """
