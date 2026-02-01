@@ -283,7 +283,8 @@ class Peer():
                     self.handle_election_message(sender_id)
                 elif message.startswith("OK"):
                     # Received OK from higher node
-                    self.received_ok = True
+                    with self.lock:
+                        self.received_ok = True
                 elif message.startswith("COORDINATOR:"):
                     new_leader = message.split(":")[1]
                     print(f"Received COORDINATOR announcement: {new_leader}")
