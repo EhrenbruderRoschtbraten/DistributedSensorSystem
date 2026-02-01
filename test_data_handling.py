@@ -73,21 +73,34 @@ def run_test():
     # Verify each peer directory contains CSV for every sensor
     per_peer_missing = {}
     for holder in peer_ids:  # directory owner
-        missing_csvs = []
+        missing_or_empty_csvs = []
+        header_only_csvs = []
         for sensor in peer_ids:
             path = os.path.join(peer_dirs.get(holder, os.path.join("data", holder)), f"{sensor}.csv")
             rows = read_csv_rows(path)
-            if len(rows) <= 1:
-                missing_csvs.append(sensor)
+            if not rows:
+                # File is missing, unreadable, or completely empty (no rows at all)
+                missing_or_empty_csvs.append(sensor)
+            elif len(rows) == 1:
+                # CSV has only a header row and no data rows
+                header_only_csvs.append(sensor)
             else:
                 print(f"{holder}/{sensor}.csv -> {max(0, len(rows)-1)} rows; last: {rows[-1]}")
-        if missing_csvs:
-            per_peer_missing[holder] = missing_csvs
+        if missing_or_empty_csvs or header_only_csvs:
+            per_peer_missing[holder] = {
+                "missing_or_empty": missing_or_empty_csvs,
+                "header_only": header_only_csvs,
+            }
 
     if per_peer_missing:
-        print("--- FAIL: Missing or empty CSVs:")
-        for holder, sensors in per_peer_missing.items():
-            print(f"  {holder}: {', '.join(sensors)}")
+        print("--- FAIL: Missing, unreadable, or header-only CSVs (no data rows):")
+        for holder, details in per_peer_missing.items():
+            parts = []
+            if details["missing_or_empty"]:
+                parts.append(f"missing/empty: {', '.join(details['missing_or_empty'])}")
+            if details["header_only"]:
+                parts.append(f"header only (no data rows): {', '.join(details['header_only'])}")
+            print(f"  {holder}: " + "; ".join(parts))
     else:
         print("--- PASS: All peer directories contain CSVs for all sensors ---")
 
