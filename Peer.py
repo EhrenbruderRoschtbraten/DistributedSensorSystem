@@ -720,12 +720,34 @@ class Peer():
             except Exception as e:
                 print(f"Failed to send OK to {sender_id}: {e}")
 
+    def _initialize_sequencer_sequence_number(self):
+        """
+        Initialize the sequencer sequence number when this peer becomes leader.
+
+        Instead of resetting to 0 (which can cause collisions with sequence
+        numbers that may have already been used by a previous leader), we
+        advance the counter to follow the highest sequence number we know
+        about locally.
+        """
+        try:
+            # If delivered_messages is a sequence of previously ordered messages,
+            # using its length as the starting point helps avoid reusing
+            # sequence numbers that have already been observed.
+            if hasattr(self, "delivered_messages") and isinstance(self.delivered_messages, (list, tuple)):
+                self.sequencer_sequence_number = len(self.delivered_messages)
+            else:
+                # Fallback: preserve any existing value, or start from 0 if unset.
+                self.sequencer_sequence_number = getattr(self, "sequencer_sequence_number", 0)
+        except Exception:
+            # Defensive fallback in case of unexpected state.
+            self.sequencer_sequence_number = getattr(self, "sequencer_sequence_number", 0)
+
     def announce_coordinator(self):
         self.isGroupLeader = True
         self.leader_id = self.peer_id
         self.sequencer_peer_id = self.peer_id
         # Initialize sequencer sequence number when this peer becomes leader
-        self.sequencer_sequence_number = 0
+        self._initialize_sequencer_sequence_number()
         self.start_heartbeat_thread()
         message = f"COORDINATOR:{self.peer_id}"
         for pid, info in self.groupView.items():
