@@ -118,7 +118,7 @@ class Peer():
             if self.sensor_thread is None:
                 self.start_sensor_thread()
         except Exception as e:
-            print(f"Failed to start sensor thread: {e}")
+            print(f"Failed to start sensor thread: {type(e).__name__}: {e}")
         # Keep the peer running by joining the threads
         if self.tcp_thread:
             self.tcp_thread.join()
