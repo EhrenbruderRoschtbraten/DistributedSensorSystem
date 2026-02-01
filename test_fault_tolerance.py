@@ -9,8 +9,8 @@ import sys
 
 # Setup similar to main_multithreading.py but with control to kill a peer
 
-def peer_process(peer_id, address, port):
-    p = Peer.Peer(peer_id=peer_id, address=address, port=port)
+def peer_process(peer_label, address, port):
+    p = Peer.Peer(address=address, port=port)
     # Redirect stdout to avoid clutter or keep it for debugging
     # sys.stdout = open(f'{peer_id}_log.txt', 'w') 
     p.start()

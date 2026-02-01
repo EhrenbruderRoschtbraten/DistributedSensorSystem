@@ -3,40 +3,66 @@ import time
 import os
 import csv
 import sys
+import shutil
+from pathlib import Path
 import Peer
 import Peer_utils
 
 
-def peer_process(peer_id, address, port):
-    os.makedirs("logs", exist_ok=True)
-    log_path = f"logs/{peer_id}_log.txt"
+def peer_process(peer_label, address, port):
+    Path("logs").mkdir(exist_ok=True)
+    log_path = Path("logs") / f"{peer_label}_log.txt"
     sys.stdout = open(log_path, 'w', buffering=1, encoding='utf-8')
     sys.stderr = sys.stdout
-    p = Peer.Peer(peer_id=peer_id, address=address, port=port)
+    p = Peer.Peer(address=address, port=port)
     p.start()
 
 
-def read_csv_rows(path):
-    if not os.path.exists(path):
+def read_csv_rows(path: Path):
+    if not path.exists():
         return []
-    rows = []
     try:
-        with open(path, newline='', encoding='utf-8') as f:
-            r = csv.reader(f)
-            rows = list(r)
+        with path.open(newline='', encoding='utf-8') as f:
+            return list(csv.reader(f))
     except Exception as e:
         print(f"Failed to read CSV file '{path}': {e}", file=sys.stderr)
-    return rows
+        return []
+
+
+def read_log(path: Path) -> str:
+    try:
+        if path.exists():
+            with path.open('r', encoding='utf-8', errors='ignore') as f:
+                return f.read()
+    except Exception as exc:
+        print(f"Warning: failed to read log file '{path}': {exc}", file=sys.stderr)
+    return ""
+
+
+def extract_internal_id(content: str) -> str | None:
+    for line in content.splitlines():
+        if line.startswith("Peer ID:"):
+            return line.split("Peer ID:", 1)[1].strip()
+    return None
 
 
 def run_test():
     print("--- Starting Data Handling Test (mocked sensors) ---")
 
-    peer_ids = ["peer1", "peer2", "peer3"]
-    peers = {}
+    peer_labels = ["peer1", "peer2", "peer3"]
+    peers: dict[str, dict] = {}
+
+    # Reset base data directory before launching peers
+    base_data = Path.cwd() / "data"
+    if base_data.is_dir():
+        try:
+            shutil.rmtree(base_data)
+            print(f"Cleared base data directory: {base_data}")
+        except Exception as e:
+            print(f"Failed to clear base data directory {base_data}: {e}")
 
     # Start peers (staggered)
-    for pid in peer_ids:
+    for pid in peer_labels:
         address = Peer_utils.get_local_ip()
         port = Peer_utils.get_free_port()
         proc = multiprocessing.Process(target=peer_process, args=(pid, address, port))
@@ -45,7 +71,7 @@ def run_test():
         peers[pid] = {
             "proc": proc,
             "port": port,
-            "log": f"logs/{pid}_log.txt",
+            "log": Path("logs") / f"{pid}_log.txt",
         }
         print(f"Started {pid} with PID {proc.pid} on port {port}")
         time.sleep(2)
@@ -56,33 +82,45 @@ def run_test():
     print(f"--- Waiting for stabilization ({stabilize}s) + sampling ({extra}s) ---")
     time.sleep(stabilize + extra)
 
+    # Parse internal UUIDs from logs
+    internal_ids: list[str] = []
+    label_to_internal: dict[str, str] = {}
+    for lbl in peer_labels:
+        content = read_log(peers[lbl]["log"])
+        internal = extract_internal_id(content)
+        if internal:
+            internal_ids.append(internal)
+            label_to_internal[lbl] = internal
+
+    if not internal_ids:
+        print("--- FAIL: Could not parse internal peer IDs from logs ---")
+
     # Check per-peer directories and per-sensor CSVs
-    base_missing = []
-    peer_dirs = {}
-    for pid in peer_ids:
-        pdir = os.path.join("data", pid)
-        peer_dirs[pid] = pdir
-        if not os.path.isdir(pdir):
-            base_missing.append(pid)
+    base_missing: list[str] = []
+    peer_dirs: dict[str, Path] = {}
+    for internal in internal_ids:
+        pdir = Path("data") / internal
+        peer_dirs[internal] = pdir
+        if not pdir.is_dir():
+            base_missing.append(internal)
 
     if base_missing:
         print("--- FAIL: Missing data directories for:", ", ".join(base_missing))
     else:
-        print("Data directories present for:", ", ".join(peer_ids))
+        print("Data directories present for:", ", ".join(internal_ids))
 
     # Verify each peer directory contains CSV for every sensor
-    per_peer_missing = {}
-    for holder in peer_ids:  # directory owner
-        missing_or_empty_csvs = []
-        header_only_csvs = []
-        for sensor in peer_ids:
-            path = os.path.join(peer_dirs.get(holder, os.path.join("data", holder)), f"{sensor}.csv")
+    per_peer_missing: dict[str, dict[str, list[str]]] = {}
+    for holder in internal_ids:  # directory owner (UUID dir name)
+        missing_or_empty_csvs: list[str] = []
+        header_only_csvs: list[str] = []
+        directory = peer_dirs.get(holder, Path("data") / holder)
+        for sensor in internal_ids:
+            path = directory / f"{sensor}.csv"
             rows = read_csv_rows(path)
             if not rows:
-                # File is missing, unreadable, or completely empty (no rows at all)
                 missing_or_empty_csvs.append(sensor)
             elif len(rows) == 1:
-                # CSV has only a header row and no data rows
                 header_only_csvs.append(sensor)
             else:
                 print(f"{holder}/{sensor}.csv -> {max(0, len(rows)-1)} rows; last: {rows[-1]}")
@@ -95,7 +133,7 @@ def run_test():
     if per_peer_missing:
         print("--- FAIL: Missing, unreadable, or header-only CSVs (no data rows):")
         for holder, details in per_peer_missing.items():
-            parts = []
+            parts: list[str] = []
             if details["missing_or_empty"]:
                 parts.append(f"missing/empty: {', '.join(details['missing_or_empty'])}")
             if details["header_only"]:

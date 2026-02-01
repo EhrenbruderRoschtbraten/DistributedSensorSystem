@@ -10,7 +10,7 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 - Mocked sensor data generation and replication across peers via totally ordered multicast.
 
 ## Leader Election (Bully Algorithm)
-- Priority: peers compare by `(peer_id, port)` lexicographically. With `peer1`, `peer2`, `peer3`, the order is `peer3 > peer2 > peer1`.
+- Priority: peers compare by `(peer_id, ip, port)` lexicographically. This guarantees a deterministic total order across hosts. UUID collisions are astronomically unlikely; if one ever occurs, IP and port disambiguate.
 - Trigger: election starts when members detect leader heartbeat timeout or when a leader failure is processed.
 - Flow:
   1. A peer sends `ELECTION:<sender_id>` to all peers with higher priority.
@@ -61,6 +61,10 @@ python test_leader_election.py
 - Every peer appends delivered measurements to per-sensor CSVs under its own directory: `data/{peer_id}/{sensor_id}.csv`.
 - This means each peer holds a full replicated set of all sensors' data, easing recovery after failures.
 - CSV columns: `sequence,timestamp,sensor_id,temperature_c,humidity_pct,pressure_hpa`.
+
+### Run-to-run reset
+- On peer startup, its `data/{peer_id}` directory is cleared and recreated to avoid appending to prior runs.
+- The test `test_data_handling.py` also clears the base `data/` directory before launching peers for a clean test environment.
 
 ## Windows Notes
 - You may see warnings about `SO_REUSEPORT` not being supported.

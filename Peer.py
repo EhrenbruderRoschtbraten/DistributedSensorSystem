@@ -6,11 +6,14 @@ import uuid
 import time
 import queue
 import json
+import ast
 import struct
 import os
 import csv
 import random
-from datetime import datetime
+from datetime import datetime, timezone
+import shutil
+from pathlib import Path
 
 
 BROADCAST_PORT = 9999  # Dedicated port for UDP broadcasts
@@ -20,8 +23,9 @@ MCAST_GRP = '224.1.1.1'
 MCAST_PORT = 5007
 
 class Peer():
-    def __init__(self, peer_id, address, port):
-        self.peer_id = peer_id
+    def __init__(self, address, port):
+        # Auto-generate a unique ID per peer
+        self.peer_id = str(uuid.uuid4())
         self.address = address
         self.partOfNetwork = False
         self.port = port
@@ -57,13 +61,20 @@ class Peer():
         self.sensor_interval_seconds = 15
         self.sensor_thread = None
         # Each peer writes into its own data directory for replication
-        self.data_dir = os.path.join(os.getcwd(), "data", self.peer_id)
+        self.data_dir = Path.cwd() / "data" / self.peer_id
+        # Per-connection TCP receive buffers for newline-framed messages
+        self.conn_buffers = {}
 
 
     def __str__(self):
         return f"Peer ID: {self.peer_id}, Address: {self.address}, Port: {self.port}"
     
     def start(self):
+        # Reset this peer's data directory at startup for clean runs
+        try:
+            self.reset_data_dir()
+        except Exception as e:
+            print(f"Failed to reset data dir on start: {e}")
         self.start_listening_threads()
         self.broadcast_new_peer_request('127.0.0.1', 9999)
         time_after_broadcast = time.time()
@@ -200,6 +211,27 @@ class Peer():
             # self.connection_dict[f"peer_{peer_port}"] = conn
             self.connection_dict[peer_id] = conn
 
+            # Update local group membership knowledge
+            if peer_id not in self.groupView:
+                self.groupView[peer_id] = {
+                    'address': peer_ip,
+                    'port': peer_port,
+                    'role': 'member'
+                }
+                if peer_id not in self.orderedPeerList:
+                    self.orderedPeerList.append(peer_id)
+                    self.orderedPeerList = sorted(self.orderedPeerList)
+                print(f"Updated group view on accept: {self.groupView}")
+                # If we're the leader, propagate updated view
+                if self.isGroupLeader:
+                    self.view_id += 1
+                    self.multicast_groupviewandorderedlist_update()
+            else:
+                # Collision guard: same peer_id seen with a different endpoint
+                existing = self.groupView.get(peer_id, {})
+                if existing.get('address') != peer_ip or existing.get('port') != peer_port:
+                    print(f"WARNING: Detected peer_id collision for {peer_id}. Existing=({existing.get('address')}:{existing.get('port')}), Incoming=({peer_ip}:{peer_port}).")
+
             threading.Thread(target=self.receive_message,
                              args=(peer_id,),
                              daemon=True).start()
@@ -208,6 +240,9 @@ class Peer():
     def send_message(self, peer_key, message):
         if peer_key in self.connection_dict:
             conn = self.connection_dict[peer_key]
+            # Ensure newline framing for TCP messages
+            if not message.endswith("\n"):
+                message = message + "\n"
             conn.sendall(message.encode())
             print(f"Sent to {peer_key}: {message}")
         else:
@@ -217,6 +252,8 @@ class Peer():
         print(f"Receive thread started for {peer_key}")
         if peer_key in self.connection_dict:
             conn = self.connection_dict[peer_key]
+            # Retrieve or initialize buffer for this connection
+            buffer = self.conn_buffers.get(peer_key, "")
             while True:
                 try:
                     data = conn.recv(buffer_size)
@@ -226,78 +263,121 @@ class Peer():
                 except Exception as e:
                     print(f"Connection error with {peer_key}: {e}")
                     break
-                message = data.decode()
-                print(f"Received from {peer_key}: {message}")
-                if message.startswith("SUCCESSOR_INFORMATION:"):
-                    parts = message.split("SUCCESSOR_INFORMATION:")[1].split(":", 1)
-                    successor_list_str = parts[0]
-                    group_view_str = parts[1]
-                    successor_list = eval(successor_list_str)
-                    group_view = eval(group_view_str)
-                    self.handle_successor_information(successor_list, group_view)
-                    self.partOfNetwork = True   #ONLY AFTER RECEIVING SUCCESSOR INFO DO WE CONSIDER OURSELVES PART OF THE NETWORK
-                    print(f"Peer {self.peer_id} is now part of the network.")
-                    print("successor information processed. ", self.successor)
-                elif message == "HEARTBEAT":
-                    self.last_leader_heartbeat = time.time()
-                    self.send_message(peer_key, "HEARTBEAT_ACK")
-                elif message == "HEARTBEAT_ACK":
-                    # Leader received ack, update timestamp
-                    print(f"Received HEARTBEAT_ACK from {peer_key}")
-                    self.peer_last_heartbeat[peer_key] = time.time()
-                elif message.startswith("VIEW_CHANGE:"):
-                    print(f"Hurrah Received VIEW_CHANGE message: {message} my peer id is {self.peer_id}")
-                    parts = message.split("VIEW_CHANGE:")[1].split("-", 2)
-                    new_ordered_list_str = parts[0]
-                    new_group_view_str = parts[1]
-                    new_view_id_str = parts[2]
-                    new_ordered_list = eval(new_ordered_list_str)
-                    new_group_view = eval(new_group_view_str)
-                    new_view_id = int(new_view_id_str)
-                    print(f"Parsed VIEW_CHANGE - Ordered List: {new_ordered_list}, Group View: {new_group_view}, View ID: {new_view_id}")
-                    self.handle_view_change(new_ordered_list, new_group_view, new_view_id)
-                elif message.startswith("ADDED TO NETWORK"):
-                    print(f"Peer {self.peer_id} received acknowledgement of being added to the network.")
-                    self.partOfNetwork = True
-                    self.sequencer_peer_id = peer_key
-                    self.leader_id = peer_key
-                    if(self.multicast_thread_active==False):
-                        self.create_multicast_threads()
-                    # Start leader heartbeat monitoring as a member
-                    leader_thread = getattr(self, "leader_check_thread", None)
-                    if (not self.isGroupLeader and
-                        (leader_thread is None or not leader_thread.is_alive())):
-                        self.start_leader_check_thread()
-                elif message.startswith("SEQUENCER_REQUEST:"):
-                    if self.sequencer_peer_id != self.peer_id:
-                        print(f"Error: Peer {self.peer_id} received sequencer request but is not the sequencer.")
+                buffer += data.decode()
+                # Process complete newline-delimited messages
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    message = line.strip()
+                    if not message:
                         continue
-                    else:
-                        # Handle sequencer request
-                        original_msg = message.split("SEQUENCER_REQUEST:")[1]
-                        print(f"Sequencer request received: {original_msg}")
+                    print(f"Received from {peer_key}: {message}")
+                    if message.startswith("SUCCESSOR_INFORMATION:"):
+                        parts = message.split("SUCCESSOR_INFORMATION:")[1].split(":", 1)
+                        successor_list_str = parts[0]
+                        group_view_str = parts[1]
+                        try:
+                            successor_list = ast.literal_eval(successor_list_str)
+                            group_view = ast.literal_eval(group_view_str)
+                        except Exception as e:
+                            print(f"Failed to parse SUCCESSOR_INFORMATION safely: {e}")
+                            continue
+                        self.handle_successor_information(successor_list, group_view)
+                        self.partOfNetwork = True   #ONLY AFTER RECEIVING SUCCESSOR INFO DO WE CONSIDER OURSELVES PART OF THE NETWORK
+                        print(f"Peer {self.peer_id} is now part of the network.")
+                        print("successor information processed. ", self.successor)
+                    elif message == "HEARTBEAT":
+                        # Only accept heartbeats from the known leader
+                        if peer_key == self.leader_id:
+                            self.last_leader_heartbeat = time.time()
+                            self.send_message(peer_key, "HEARTBEAT_ACK")
+                            # Ensure leader heartbeat monitoring is active
+                            leader_thread = getattr(self, "leader_check_thread", None)
+                            if (not self.isGroupLeader and
+                                (leader_thread is None or not leader_thread.is_alive())):
+                                self.start_leader_check_thread()
+                        else:
+                            print(f"Ignoring heartbeat from non-leader {peer_key}")
+                    elif message == "HEARTBEAT_ACK":
+                        # Leader received ack, update timestamp
+                        print(f"Received HEARTBEAT_ACK from {peer_key}")
+                        self.peer_last_heartbeat[peer_key] = time.time()
+                    elif message.startswith("VIEW_CHANGE_JSON:"):
+                        try:
+                            payload_str = message.split("VIEW_CHANGE_JSON:", 1)[1]
+                            payload = json.loads(payload_str)
+                            new_ordered_list = payload.get("ordered", [])
+                            new_group_view = payload.get("group", {})
+                            new_view_id = int(payload.get("view_id", 0))
+                            print(f"Parsed VIEW_CHANGE_JSON - Ordered: {new_ordered_list}, ViewID: {new_view_id}")
+                            self.handle_view_change(new_ordered_list, new_group_view, new_view_id)
+                        except Exception as e:
+                            print(f"Failed to parse VIEW_CHANGE_JSON: {e}")
+                            continue
+                    elif message.startswith("VIEW_CHANGE:"):
+                        print(f"Hurrah Received VIEW_CHANGE message: {message} my peer id is {self.peer_id}")
+                        parts = message.split("VIEW_CHANGE:")[1].split("-", 2)
+                        new_ordered_list_str = parts[0]
+                        new_group_view_str = parts[1]
+                        new_view_id_str = parts[2]
+                        try:
+                            new_ordered_list = ast.literal_eval(new_ordered_list_str)
+                            new_group_view = ast.literal_eval(new_group_view_str)
+                        except Exception as e:
+                            print(f"Failed to parse VIEW_CHANGE safely: {e}")
+                            continue
+                        new_view_id = int(new_view_id_str)
+                        print(f"Parsed VIEW_CHANGE - Ordered List: {new_ordered_list}, Group View: {new_group_view}, View ID: {new_view_id}")
+                        self.handle_view_change(new_ordered_list, new_group_view, new_view_id)
+                    elif message.startswith("ADDED TO NETWORK"):
+                        print(f"Peer {self.peer_id} received acknowledgement of being added to the network.")
+                        self.partOfNetwork = True
+                        # Ensure this peer is marked as a member, not leader
+                        self.isGroupLeader = False
+                        self.sequencer_peer_id = peer_key
+                        self.leader_id = peer_key
+                        if(self.multicast_thread_active==False):
+                            self.create_multicast_threads()
+                        # Start leader heartbeat monitoring as a member
+                        leader_thread = getattr(self, "leader_check_thread", None)
+                        if (not self.isGroupLeader and
+                            (leader_thread is None or not leader_thread.is_alive())):
+                            self.start_leader_check_thread()
+                    elif message.startswith("SEQUENCER_REQUEST:"):
+                        if self.sequencer_peer_id != self.peer_id:
+                            print(f"Error: Peer {self.peer_id} received sequencer request but is not the sequencer.")
+                            continue
+                        else:
+                            # Handle sequencer request
+                            original_msg = message.split("SEQUENCER_REQUEST:")[1]
+                            print(f"Sequencer request received: {original_msg}")
+                            with self.lock:
+                                self.sequencer_sequence_number += 1
+                                ordered_msg = (self.sequencer_sequence_number, original_msg)
+                                self.multicast_message_to_group(ordered_msg, from_peer_id=peer_key)
+                    elif message.startswith("ELECTION:"):
+                        sender_id = message.split(":")[1]
+                        self.handle_election_message(sender_id)
+                    elif message.startswith("OK"):
+                        # Received OK from higher node
                         with self.lock:
-                            self.sequencer_sequence_number += 1
-                            ordered_msg = (self.sequencer_sequence_number, original_msg)
-                            self.multicast_message_to_group(ordered_msg, from_peer_id=peer_key)
-                elif message.startswith("ELECTION:"):
-                    sender_id = message.split(":")[1]
-                    self.handle_election_message(sender_id)
-                elif message.startswith("OK"):
-                    # Received OK from higher node
-                    with self.lock:
-                        self.received_ok = True
-                elif message.startswith("COORDINATOR:"):
-                    new_leader = message.split(":")[1]
-                    print(f"Received COORDINATOR announcement: {new_leader}")
-                    self.leader_id = new_leader
-                    self.sequencer_peer_id = new_leader
-                    self.isGroupLeader = (new_leader == self.peer_id)
-                    if self.isGroupLeader:
-                        print(f"Peer {self.peer_id} became the Group Leader via election.")
-                        self.start_heartbeat_thread()
-                    else:
-                        print(f"Peer {self.peer_id} acknowledges new leader {new_leader}.")
+                            self.received_ok = True
+                    elif message.startswith("COORDINATOR:"):
+                        new_leader = message.split(":")[1]
+                        print(f"Received COORDINATOR announcement: {new_leader}")
+                        self.leader_id = new_leader
+                        self.sequencer_peer_id = new_leader
+                        self.isGroupLeader = (new_leader == self.peer_id)
+                        if self.isGroupLeader:
+                            print(f"Peer {self.peer_id} became the Group Leader via election.")
+                            self.start_heartbeat_thread()
+                        else:
+                            print(f"Peer {self.peer_id} acknowledges new leader {new_leader}.")
+                            # Ensure leader heartbeat monitoring is active
+                            leader_thread = getattr(self, "leader_check_thread", None)
+                            if leader_thread is None or not leader_thread.is_alive():
+                                self.start_leader_check_thread()
+                # Store any partial data back into buffer
+                self.conn_buffers[peer_key] = buffer
 
         else:
             print(f"No connection found for {peer_key} while receiving message")
@@ -382,7 +462,7 @@ class Peer():
             return
         if self.sensor_thread and self.sensor_thread.is_alive():
             return
-        os.makedirs(self.data_dir, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.sensor_thread = threading.Thread(target=self._sensor_loop, daemon=True)
         self.sensor_thread.start()
         print(f"Sensor thread started for {self.peer_id} with interval {self.sensor_interval_seconds}s")
@@ -404,7 +484,8 @@ class Peer():
         temp = round(random.uniform(19.0, 24.0), 2)        # Celsius
         humidity = round(random.uniform(30.0, 60.0), 2)    # %
         pressure = round(random.uniform(990.0, 1030.0), 2) # hPa
-        ts = datetime.utcnow().isoformat() + "Z"
+        # Use timezone-aware UTC ISO 8601 with 'Z' suffix
+        ts = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
         return {
             "sensor_id": self.peer_id,
             "timestamp": ts,
@@ -430,10 +511,10 @@ class Peer():
 
     def write_measurement_csv(self, sensor_id, ts, temp, hum, pres, seq_id):
         # One CSV per sensor in this peer's directory (replicated across peers)
-        file_path = os.path.join(self.data_dir, f"{sensor_id}.csv")
-        file_exists = os.path.exists(file_path)
+        file_path = self.data_dir / f"{sensor_id}.csv"
+        file_exists = file_path.exists()
         try:
-            os.makedirs(self.data_dir, exist_ok=True)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
             with open(file_path, mode='a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 if not file_exists:
@@ -441,6 +522,19 @@ class Peer():
                 writer.writerow([seq_id, ts, sensor_id, temp, hum, pres])
         except Exception as e:
             print(f"Failed to write CSV for {sensor_id}: {e}")
+
+    def reset_data_dir(self):
+        # Remove and recreate this peer's data directory to avoid appending across runs
+        if self.data_dir.is_dir():
+            try:
+                shutil.rmtree(self.data_dir)
+                print(f"Cleared data directory: {self.data_dir}")
+            except Exception as e:
+                print(f"Failed to clear data directory {self.data_dir}: {e}")
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"Failed to create data directory {self.data_dir}: {e}")
 
 
     def create_multicast_threads(self):
@@ -543,7 +637,12 @@ class Peer():
 
     def multicast_groupviewandorderedlist_update(self):
         if self.isGroupLeader:
-            message = f"VIEW_CHANGE:{self.orderedPeerList}-{self.groupView}-{self.view_id}"
+            payload = {
+                "ordered": self.orderedPeerList,
+                "group": self.groupView,
+                "view_id": self.view_id,
+            }
+            message = f"VIEW_CHANGE_JSON:{json.dumps(payload)}"
             print(f"Multicasting updated successor information to all peers.")
             for peer_id, peer_info in self.groupView.items():
                 if peer_id != self.peer_id:
@@ -653,9 +752,23 @@ class Peer():
 
     # -------------------- Bully Algorithm --------------------
     def get_priority(self, pid):
-        # Lexicographic priority on peer_id; tie-breaker on port
-        port = self.groupView.get(pid, {}).get('port', 0)
-        return (str(pid), int(port))
+        """
+        Compute priority for the bully algorithm.
+        With multi-host peers, ensure a total order that is stable across the cluster.
+
+        Priority tuple components (in order):
+        1) uuid string (peer_id)
+        2) IP address string
+        3) port integer
+
+        This yields a deterministic ordering even across hosts. Ports can be the same
+        on different hosts, but the IP element disambiguates that case. UUID collisions
+        are astronomically unlikely; if they ever occur, IP and port act as tie-breakers.
+        """
+        info = self.groupView.get(pid, {})
+        address = str(info.get('address', ''))
+        port = int(info.get('port', 0))
+        return (str(pid), address, port)
 
     def ensure_connection(self, pid):
         if pid == self.peer_id:
@@ -674,8 +787,13 @@ class Peer():
         self.election_active = True
         self.received_ok = False
         my_pri = self.get_priority(self.peer_id)
-        higher_peers = [pid for pid in self.groupView.keys() if pid != self.peer_id and self.get_priority(pid) > my_pri]
-        print(f"Bully election from {self.peer_id}. Higher peers: {higher_peers}")
+        higher_peers = [pid for pid in self.groupView.keys() 
+                       if pid != self.peer_id and self.get_priority(pid) > my_pri]
+        print(f"Bully election from {self.peer_id}. My priority: {my_pri}")
+        print(f"Higher priority peers: {higher_peers}")
+        for peer_id in higher_peers:
+            print(f"  {peer_id}: priority {self.get_priority(peer_id)}")
+        
         # Notify higher peers
         for pid in higher_peers:
             self.ensure_connection(pid)
@@ -707,8 +825,13 @@ class Peer():
 
     def handle_election_message(self, sender_id):
         # If we have higher priority, send OK and start own election
-        if self.get_priority(self.peer_id) > self.get_priority(sender_id):
-            print(f"{self.peer_id} received ELECTION from {sender_id}. Responding OK and starting election.")
+        sender_pri = self.get_priority(sender_id)
+        my_pri = self.get_priority(self.peer_id)
+        print(f"{self.peer_id} received ELECTION from {sender_id}.")
+        print(f"  Sender priority: {sender_pri}, My priority: {my_pri}")
+        
+        if my_pri > sender_pri:
+            print(f"{self.peer_id} has higher priority. Responding OK and starting election.")
             try:
                 self.ensure_connection(sender_id)
                 self.send_message(sender_id, "OK")
@@ -718,7 +841,7 @@ class Peer():
             self.start_bully_election()
         else:
             # Lower or equal priority: per bully algorithm, do not send OK
-            print(f"{self.peer_id} received ELECTION from {sender_id}. Lower or equal priority; ignoring.")
+            print(f"{self.peer_id} has lower or equal priority; ignoring ELECTION from {sender_id}.")
 
     def _initialize_sequencer_sequence_number(self):
         """
@@ -753,11 +876,21 @@ class Peer():
         if heartbeat_thread is None or not heartbeat_thread.is_alive():
             self.start_heartbeat_thread()
         message = f"COORDINATOR:{self.peer_id}"
+        notified = set()
         for pid, info in self.groupView.items():
             if pid == self.peer_id:
                 continue
             self.ensure_connection(pid)
             try:
                 self.send_message(pid, message)
+                notified.add(pid)
             except Exception as e:
                 print(f"Failed to send COORDINATOR to {pid}: {e}")
+        # Also notify any established TCP connections not in groupView
+        for pid in list(self.connection_dict.keys()):
+            if pid == self.peer_id or pid in notified:
+                continue
+            try:
+                self.send_message(pid, message)
+            except Exception as e:
+                print(f"Failed to send COORDINATOR via existing connection to {pid}: {e}")
