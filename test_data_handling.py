@@ -24,8 +24,8 @@ def read_csv_rows(path):
         with open(path, newline='', encoding='utf-8') as f:
             r = csv.reader(f)
             rows = list(r)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Failed to read CSV file '{path}': {e}", file=sys.stderr)
     return rows
 
 
