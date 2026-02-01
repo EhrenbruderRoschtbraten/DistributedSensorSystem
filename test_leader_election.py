@@ -69,8 +69,12 @@ def run_test():
                 break
 
     if leader_id is None:
-        # As a last resort assume peer1 is leader
-        leader_id = "peer1"
+        error_msg = (
+            "Failed to determine leader from peer logs after multiple attempts; "
+            "cannot safely proceed with kill-leader test."
+        )
+        print(error_msg)
+        raise RuntimeError(error_msg)
     print(f"Detected leader: {leader_id}")
 
     # Crash the detected leader
