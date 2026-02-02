@@ -10,7 +10,7 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 - Mocked sensor data generation and replication across peers via totally ordered multicast.
 
 ## Leader Election (Bully Algorithm)
-- Priority: peers compare by `(peer_id, ip, port)` lexicographically. This guarantees a deterministic total order across hosts. UUID collisions are astronomically unlikely; if one ever occurs, IP and port disambiguate.
+ - Priority: peers compare by `peer_id` (UUID) lexicographically. This yields a deterministic total order without needing host or port tie-breakers.
 - Trigger: election starts when members detect leader heartbeat timeout or when a leader failure is processed.
 - Flow:
   1. A peer sends `ELECTION:<sender_id>` to all peers with higher priority.

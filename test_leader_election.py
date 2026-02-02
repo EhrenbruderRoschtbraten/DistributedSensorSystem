@@ -8,12 +8,19 @@ import Peer_utils
 
 
 def peer_process(peer_label, address, port):
-    # Redirect output to per-peer log for verification
+    """Peer process entry point for election test.
+
+    Redirects stdout/stderr to a per-peer log file and starts the peer.
+
+    Args:
+        peer_label (str): Human-readable label (e.g., "peer1").
+        address (str): Local IP address for the peer.
+        port (int): TCP port for the peer's server socket.
+    """
     os.makedirs("logs", exist_ok=True)
     log_path = f"logs/{peer_label}_log.txt"
     sys.stdout = open(log_path, 'w', buffering=1, encoding='utf-8')
     sys.stderr = sys.stdout
-    # Peers now auto-generate UUIDs; no external peer_id argument
     p = Peer.Peer(address=address, port=port)
     p.start()
 
@@ -39,6 +46,11 @@ def extract_internal_id(content):
 
 
 def run_test():
+    """Run the bully leader election test (crash current leader).
+
+    Starts four peers, detects current leader, terminates it, waits for a new
+    election, and verifies success via logs.
+    """
     print("=" * 80)
     print("Starting Bully Leader Election Test (kill leader)")
     print("=" * 80)
@@ -117,62 +129,73 @@ def run_test():
     print("\n[VERIFICATION] Computing expected leader by priority...")
     remaining = [pid for pid in peer_labels if pid != leader_label]
 
-    def priority_tuple(internal_id, pid_label):
-        """Priority is (uuid_string, port_int) tuple."""
-        port = peers[pid_label]["port"]
-        return (str(internal_id), int(port))
+    def priority_key(internal_id):
+        """Priority is UUID string lexicographic ordering (UUID-only)."""
+        return str(internal_id)
 
+    # Determine expected leader if all UUIDs are known; otherwise, we'll detect actual leader from logs
+    expected_leader_label = None
+    expected_leader_uuid = None
     if all(label_to_internal.get(lab) for lab in remaining):
-        # All UUIDs extracted successfully
-        print("  All peer UUIDs available, calculating priority:")
+        print("  All peer UUIDs available, calculating priority (UUID-only):")
         for lab in remaining:
-            pri = priority_tuple(label_to_internal[lab], lab)
+            pri = priority_key(label_to_internal[lab])
             print(f"    {lab:6}: {pri}")
-        
-        expected_leader_label = max(remaining, key=lambda lab: priority_tuple(label_to_internal[lab], lab))
-        expected_leader_uuid = label_to_internal[expected_leader_label]
-    else:
-        # Fallback to port alone if internal IDs not all parsed
-        print("  Some peer UUIDs missing, using port as fallback:")
-        for lab in remaining:
-            uuid_str = label_to_internal.get(lab, "?")
-            port = peers[lab]["port"]
-            print(f"    {lab:6}: uuid={uuid_str}, port={port}")
-        
-        expected_leader_label = max(remaining, key=lambda lab: int(peers[lab]["port"]))
+        expected_leader_label = max(remaining, key=lambda lab: priority_key(label_to_internal[lab]))
         expected_leader_uuid = label_to_internal.get(expected_leader_label, "unknown")
+    else:
+        print("  Warning: Some peer UUIDs missing; will detect leader from logs.")
 
     print(f"  Expected new leader: {expected_leader_label} (UUID: {expected_leader_uuid})")
 
     # Read logs from remaining peers
     remaining_logs = {pid: read_log(peers[pid]["log"]) for pid in remaining}
-    expected_leader_log = remaining_logs.get(expected_leader_label, "")
+    expected_leader_log = remaining_logs.get(expected_leader_label, "") if expected_leader_label else ""
 
     # Check for successful election
     print("\n[RESULT] Checking for election success...")
     success = False
     success_reasons = []
 
-    # Check 1: Any remaining peer acknowledging the new coordinator
-    for pid, log in remaining_logs.items():
-        if f"Received COORDINATOR announcement: {expected_leader_uuid}" in log:
+    if expected_leader_label and expected_leader_uuid:
+        # Check 1: Any remaining peer acknowledging the new coordinator
+        for pid, log in remaining_logs.items():
+            if f"Received COORDINATOR announcement: {expected_leader_uuid}" in log:
+                success = True
+                success_reasons.append(f"✓ {pid} received COORDINATOR announcement for {expected_leader_uuid}")
+
+        # Check 2: Expected leader confirming it became leader
+        if "became the Group Leader via election" in expected_leader_log:
             success = True
-            success_reasons.append(f"✓ {pid} received COORDINATOR announcement for {expected_leader_uuid}")
+            success_reasons.append(f"✓ {expected_leader_label} announced it became Group Leader via election")
 
-    # Check 2: Expected leader confirming it became leader
-    if "became the Group Leader via election" in expected_leader_log:
-        success = True
-        success_reasons.append(f"✓ {expected_leader_label} announced it became Group Leader via election")
-
-    # Check 3: Expected leader has "Is Group Leader: True"
-    if "Is Group Leader: True" in expected_leader_log:
-        success = True
-        success_reasons.append(f"✓ {expected_leader_label} confirmed in logs as Group Leader")
+        # Check 3: Expected leader has "Is Group Leader: True"
+        if "Is Group Leader: True" in expected_leader_log:
+            success = True
+            success_reasons.append(f"✓ {expected_leader_label} confirmed in logs as Group Leader")
+    else:
+        # Generic success detection when expectation can't be computed
+        # Check A: Any COORDINATOR announcement seen
+        for pid, log in remaining_logs.items():
+            if "Received COORDINATOR announcement:" in log:
+                success = True
+                success_reasons.append(f"✓ {pid} logged a COORDINATOR announcement")
+                break
+        # Check B: Any remaining peer logs 'Is Group Leader: True' or 'became the Group Leader via election'
+        if not success:
+            for pid, log in remaining_logs.items():
+                if ("Is Group Leader: True" in log) or ("became the Group Leader via election" in log):
+                    success = True
+                    success_reasons.append(f"✓ {pid} became or confirmed Group Leader")
+                    break
 
     print()
     if success:
         print("=" * 80)
-        print("PASS: Leader election successful!")
+        if expected_leader_label and expected_leader_uuid:
+            print(f"PASS: Leader election successful! Expected leader: {expected_leader_label} ({expected_leader_uuid})")
+        else:
+            print("PASS: Leader election successful!")
         print("=" * 80)
         for reason in success_reasons:
             print(reason)

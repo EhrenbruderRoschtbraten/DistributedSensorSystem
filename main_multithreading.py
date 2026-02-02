@@ -1,3 +1,9 @@
+"""Launch multiple peers in separate processes for local testing.
+
+This script starts three peers with auto-generated UUIDs and staggers their
+startup to reduce contention.
+"""
+
 import Peer
 import multiprocessing
 import socket
@@ -8,7 +14,12 @@ import Peer_utils
 #initialize two peers
 #start peer1 listening socket in a separate process
 def peer1stuff(peer1address, peer1port):
-    # Create peer instance in this process (auto-generated UUID)
+    """Run a peer instance in the current process.
+
+    Args:
+        peer1address (str): Local IP address for the peer.
+        peer1port (int): TCP port for the peer's server socket.
+    """
     peer1 = Peer.Peer(address=peer1address, port=peer1port)
     peer1.start()
 
@@ -19,13 +30,23 @@ def peer1stuff(peer1address, peer1port):
 
 #start peer2 listening socket in a separate process
 def peer2stuff(peer2address, peer2port):
-    # Create peer instance in this process (auto-generated UUID)
+    """Run a second peer instance in the current process.
+
+    Args:
+        peer2address (str): Local IP address for the peer.
+        peer2port (int): TCP port for the peer's server socket.
+    """
     peer2 = Peer.Peer(address=peer2address, port=peer2port)
     peer2.start()
 
 #start peer2 listening socket in a separate process
 def peer3stuff(peer3address, peer3port):
-    # Create peer instance in this process (auto-generated UUID)
+    """Run a third peer instance in the current process.
+
+    Args:
+        peer3address (str): Local IP address for the peer.
+        peer3port (int): TCP port for the peer's server socket.
+    """
     peer3 = Peer.Peer(address=peer3address, port=peer3port)
     peer3.start()
 

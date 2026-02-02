@@ -1,4 +1,10 @@
 
+"""Fail-stop fault tolerance test harness.
+
+Starts three peers, terminates one to simulate a crash, and relies on logs to
+verify that the group membership is updated accordingly.
+"""
+
 import multiprocessing
 import time
 import os
@@ -10,12 +16,22 @@ import sys
 # Setup similar to main_multithreading.py but with control to kill a peer
 
 def peer_process(peer_label, address, port):
+    """Entry point for a peer process used in the test.
+
+    Args:
+        peer_label (str): Human-readable label (e.g., "peer1").
+        address (str): Local IP address.
+        port (int): TCP port for peer's server socket.
+    """
     p = Peer.Peer(address=address, port=port)
-    # Redirect stdout to avoid clutter or keep it for debugging
-    # sys.stdout = open(f'{peer_id}_log.txt', 'w') 
     p.start()
 
 def run_test():
+    """Run the fail-stop fault tolerance scenario.
+
+    Starts three peers, kills one, waits for detection timeout, and prints
+    guidance for verifying logs.
+    """
     print("--- Starting Fail-Stop Fault Tolerance Test ---")
     
     # 1. Setup Identities

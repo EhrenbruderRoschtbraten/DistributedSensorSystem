@@ -1,3 +1,9 @@
+"""Data handling and replication test harness.
+
+Launches a small cluster, waits for mocked sensor data to be generated and
+replicated, then verifies per-peer CSV files.
+"""
+
 import multiprocessing
 import time
 import os
@@ -10,6 +16,15 @@ import Peer_utils
 
 
 def peer_process(peer_label, address, port):
+    """Peer process entry point for data handling test.
+
+    Redirects stdout/stderr to a per-peer log file and starts the peer.
+
+    Args:
+        peer_label (str): Human-readable label (e.g., "peer1").
+        address (str): Local IP address for the peer.
+        port (int): TCP port for the peer's server socket.
+    """
     Path("logs").mkdir(exist_ok=True)
     log_path = Path("logs") / f"{peer_label}_log.txt"
     sys.stdout = open(log_path, 'w', buffering=1, encoding='utf-8')
@@ -19,6 +34,14 @@ def peer_process(peer_label, address, port):
 
 
 def read_csv_rows(path: Path):
+    """Read all rows from a CSV file.
+
+    Args:
+        path (Path): Path to the CSV file.
+
+    Returns:
+        list[list[str]]: Parsed rows including header; empty list on error or missing file.
+    """
     if not path.exists():
         return []
     try:
@@ -30,6 +53,14 @@ def read_csv_rows(path: Path):
 
 
 def read_log(path: Path) -> str:
+    """Read an entire log file as a string.
+
+    Args:
+        path (Path): Path to the log file.
+
+    Returns:
+        str: File contents or empty string on error/missing file.
+    """
     try:
         if path.exists():
             with path.open('r', encoding='utf-8', errors='ignore') as f:
@@ -40,6 +71,14 @@ def read_log(path: Path) -> str:
 
 
 def extract_internal_id(content: str) -> str | None:
+    """Parse a peer UUID from log content.
+
+    Args:
+        content (str): Entire log file content.
+
+    Returns:
+        str | None: Extracted UUID string, if present.
+    """
     for line in content.splitlines():
         if line.startswith("Peer ID:"):
             return line.split("Peer ID:", 1)[1].strip()
@@ -47,6 +86,11 @@ def extract_internal_id(content: str) -> str | None:
 
 
 def run_test():
+    """Run the data handling test.
+
+    Launches three peers, waits for data generation, and verifies that each
+    peer has replicated CSVs for all sensors.
+    """
     print("--- Starting Data Handling Test (mocked sensors) ---")
 
     peer_labels = ["peer1", "peer2", "peer3"]
