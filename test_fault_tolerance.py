@@ -7,11 +7,9 @@ verify that the group membership is updated accordingly.
 
 import multiprocessing
 import time
-import os
+
 import Peer
 import Peer_utils
-import identity
-import sys
 
 # Setup similar to main_multithreading.py but with control to kill a peer
 

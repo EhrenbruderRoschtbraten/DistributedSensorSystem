@@ -4,10 +4,10 @@ This script starts three peers with auto-generated UUIDs and staggers their
 startup to reduce contention.
 """
 
-import Peer
 import multiprocessing
-import socket
 import time
+
+import Peer
 import Peer_utils
 
 

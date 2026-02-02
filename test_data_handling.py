@@ -4,13 +4,13 @@ Launches a small cluster, waits for mocked sensor data to be generated and
 replicated, then verifies per-peer CSV files.
 """
 
-import multiprocessing
-import time
-import os
 import csv
-import sys
+import multiprocessing
 import shutil
+import sys
+import time
 from pathlib import Path
+
 import Peer
 import Peer_utils
 

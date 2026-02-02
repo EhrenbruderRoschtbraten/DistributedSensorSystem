@@ -6,6 +6,7 @@ free TCP port from the OS, and derive a broadcast address.
 
 import socket
 
+
 def get_local_ip():
     """Return the local IP address.
 
