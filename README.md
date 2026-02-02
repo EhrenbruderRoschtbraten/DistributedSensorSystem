@@ -7,9 +7,10 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 - Peers maintain a `groupView` and `orderedPeerList` for membership and ordering.
 - The leader acts as both group coordinator and sequencer for ordered multicast.
 - Failure detection uses leader heartbeats and member ACKs.
+- Mocked sensor data generation and replication across peers via totally ordered multicast.
 
 ## Leader Election (Bully Algorithm)
-- Priority: peers compare by `(peer_id, port)` lexicographically. With `peer1`, `peer2`, `peer3`, the order is `peer3 > peer2 > peer1`.
+ - Priority: peers compare by `peer_id` (UUID) lexicographically. This yields a deterministic total order without needing host or port tie-breakers.
 - Trigger: election starts when members detect leader heartbeat timeout or when a leader failure is processed.
 - Flow:
   1. A peer sends `ELECTION:<sender_id>` to all peers with higher priority.
@@ -23,6 +24,7 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 - Heartbeats: `HEARTBEAT` / `HEARTBEAT_ACK` (TCP).
 - Election: `ELECTION:<peer_id>`, `OK`, `COORDINATOR:<peer_id>` (TCP).
 - Sequencer: `SEQUENCER_REQUEST:<payload>` (TCP).
+- Sensor data: `DATA|sensor_id|timestamp|temperature|humidity|pressure` (payload inside sequencer flow).
 
 ## Failure Detection
 - Leader sends `HEARTBEAT` to members every `heartbeat_interval`; expects `HEARTBEAT_ACK` within `heartbeat_timeout`.
@@ -33,24 +35,36 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 - `heartbeat_interval` (default: 5s)
 - `heartbeat_timeout` (default: 10s)
 - `election_timeout` (default: 5s)
+- `sensor_interval_seconds` (default: 15s per peer)
 
 ## Run
 From the project root:
 
-```powershell
+```bash
 # Start three peers
-python .\main_multithreading.py
+python main_multithreading.py
 
 # Fail-stop test (kills a non-leader and checks membership updates)
-python .\test_fault_tolerance.py
+python test_fault_tolerance.py
 
 # Bully leader election test (detects current leader, kills it, verifies new leader)
-python .\test_leader_election.py
+python test_leader_election.py
 ```
 
 ## Logs
 - Tests redirect per-peer output to `logs/{peer_id}_log.txt` (e.g., `logs/peer2_log.txt`).
 - Look for `Received COORDINATOR announcement: <peer>` or `became the Group Leader via election` in these log files to verify election.
+
+## Data Replication
+- Each peer periodically generates mocked measurements (temperature, humidity, pressure) every 15s.
+- Measurements are sent to the leader (sequencer) and broadcast with a total order to all peers.
+- Every peer appends delivered measurements to per-sensor CSVs under its own directory: `data/{peer_id}/{sensor_id}.csv`.
+- This means each peer holds a full replicated set of all sensors' data, easing recovery after failures.
+- CSV columns: `sequence,timestamp,sensor_id,temperature_c,humidity_pct,pressure_hpa`.
+
+### Run-to-run reset
+- On peer startup, its `data/{peer_id}` directory is cleared and recreated to avoid appending to prior runs.
+- The test `test_data_handling.py` also clears the base `data/` directory before launching peers for a clean test environment.
 
 ## Windows Notes
 - You may see warnings about `SO_REUSEPORT` not being supported.
