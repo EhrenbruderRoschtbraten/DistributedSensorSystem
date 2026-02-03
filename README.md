@@ -33,7 +33,7 @@ A lightweight, dynamic distributed sensor network supporting automatic leader el
 
 ## Configuration Knobs
 - `heartbeat_interval` (default: 5s)
-- `heartbeat_timeout` (default: 10s)
+- `heartbeat_timeout` (default: 20s)
 - `election_timeout` (default: 5s)
 - `sensor_interval_seconds` (default: 15s per peer)
 
