@@ -438,6 +438,9 @@ class Peer():
                     elif message.startswith("ADDED TO NETWORK"):
                         print(f"Peer {self.peer_id} received acknowledgement of being added to the network.")
                         self.partOfNetwork = True
+                        starting_seq = message.split("ADDED TO NETWORK:")[1]
+                        self.expected_seq = int(starting_seq) # Jump to the current sequence!
+                        print(f"Synchronized! Now expecting message #{self.expected_seq}")
                         # Ensure this peer is marked as a member, not leader
                         self.isGroupLeader = False
                         self.sequencer_peer_id = peer_key
@@ -840,7 +843,8 @@ class Peer():
             peer_id_to_send_info (str): UUID of the peer to acknowledge.
         """
         if self.isGroupLeader:
-            message = f"ADDED TO NETWORK"
+            next_seq = self.sequencer_sequence_number + 1 if self.sequencer_sequence_number is not None else 1
+            message = f"ADDED TO NETWORK:{next_seq}"
             peer_info = self.groupView.get(peer_id_to_send_info)
             print(f"Sending acknowledgement to {peer_id_to_send_info} at {peer_info}")
             time.sleep(1)  # Give the peer time to start listening
