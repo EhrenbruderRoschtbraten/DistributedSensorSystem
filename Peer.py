@@ -119,8 +119,8 @@ class Peer():
                 print("No response received. Assuming role of Group Leader.")
                 self.isGroupLeader = True
                 self.leader_id = self.peer_id
-                self.sequencer_peer_id = self.peer_id
-                self.sequencer_sequence_number = 0
+                # self.sequencer_peer_id = self.peer_id
+                # self.sequencer_sequence_number = 0
                 self.partOfNetwork = False
                 self.groupView[self.peer_id] = {
                     'address': self.address,
@@ -136,6 +136,7 @@ class Peer():
             self.broadcast_new_peer_request('127.0.0.1', 9999)
             time.sleep(5)
         
+        time.sleep(2)  # WAIT A BIT TO ENSURE STABILITY
 
         # Start fault tolerance threads
         self.start_leader_check_thread()
@@ -143,6 +144,11 @@ class Peer():
             self.start_heartbeat_thread()
 
         time.sleep(5)  # WAIT FOR THE OTHER PEERS TO SETTLE
+
+        # If this peer self-assumed leadership (no election yet), set it as sequencer now
+        if self.isGroupLeader and not self.sequencer_peer_id:
+            print(f"Peer {self.peer_id} self-assumed leadership; announcing as coordinator/sequencer.")
+            self.announce_coordinator()
 
         if(self.peer_id == "peer1"):
             self.send_message_to_sequencer("Hello from peer1")
@@ -312,15 +318,19 @@ class Peer():
             peer_key (str): Target peer ID.
             message (str): Message payload to send.
         """
-        if peer_key in self.connection_dict:
-            conn = self.connection_dict[peer_key]
-            # Ensure newline framing for TCP messages
-            if not message.endswith("\n"):
-                message = message + "\n"
-            conn.sendall(message.encode())
-            print(f"Sent to {peer_key}: {message}")
-        else:
-            print(f"No connection found for {peer_key} while sending message only {self.connection_dict.keys()} available")
+        try:
+            if peer_key in self.connection_dict:
+                conn = self.connection_dict[peer_key]
+                # Ensure newline framing for TCP messages
+                if not message.endswith("\n"):
+                    message = message + "\n"
+                conn.sendall(message.encode())
+                print(f"Sent to {peer_key}: {message}")
+            else:
+                print(f"No connection found for {peer_key} while sending message only {self.connection_dict.keys()} available")
+        except Exception as e:
+            print(f"[Error] Connection lost to {peer_key}. Cleaning up...")
+            # self.handle_peer_failure(peer_key) # Trigger cleanup logic
 
     def receive_message(self, peer_key: str, buffer_size: int = 1024) -> None:
         """Continuously read and handle messages from a TCP peer.
@@ -370,6 +380,7 @@ class Peer():
                         print(f"Peer {self.peer_id} is now part of the network.")
                         print("successor information processed. ", self.successor)
                     elif message == "HEARTBEAT":
+                        
                         # Only accept heartbeats from the known leader
                         if peer_key == self.leader_id:
                             self.last_leader_heartbeat = time.time()
@@ -381,6 +392,11 @@ class Peer():
                                 self.start_leader_check_thread()
                         else:
                             print(f"Ignoring heartbeat from non-leader {peer_key}")
+                            # NEW: If I'm a leader and receive heartbeat from someone else claiming leadership
+                            # NEW: If I'm a leader and receive heartbeat from someone else claiming leadership
+                            if self.isGroupLeader:
+                                print(f"CONFLICT: I'm leader but got HEARTBEAT from {peer_key}. Starting election.")
+                                self.start_bully_election()
                     elif message == "HEARTBEAT_ACK":
                         # Leader received ack, update timestamp
                         print(f"Received HEARTBEAT_ACK from {peer_key}")
@@ -570,13 +586,13 @@ class Peer():
         """Start the mocked sensor data generation thread.
 
         Defers start until the peer is part of the network and the
-        `sequencer_peer_id` is known.
+        `sequencer_peer_id` is known (set after election).
         """
-        # Only start once we are part of the network and sequencer known
+        # Only start once we are part of the network and sequencer is known
         if not self.partOfNetwork or not self.sequencer_peer_id:
-            print("Sensor thread deferred until network ready.")
-            # Retry shortly to avoid missing initialization race
-            threading.Timer(3.0, self.start_sensor_thread).start()
+            print(f"Sensor thread waiting: partOfNetwork={self.partOfNetwork}, sequencer_peer_id={self.sequencer_peer_id}")
+            # Retry with longer patience to allow election to complete
+            threading.Timer(1.0, self.start_sensor_thread).start()
             return
         if self.sensor_thread and self.sensor_thread.is_alive():
             return
@@ -756,12 +772,17 @@ class Peer():
             buffer_size (int, optional): Max UDP packet size. Defaults to 1024.
         """
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if hasattr(socket, 'SO_REUSEPORT'):
-            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        if hasattr(socket, 'SO_REUSEADDR'):
+            udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         else:
-            print("Warning: SO_REUSEPORT not supported on this platform.")
-        udp_sock.bind(('0.0.0.0', BROADCAST_PORT))
-        print(f"Listening for broadcasts on port {BROADCAST_PORT}")
+            print("Warning: SO_REUSEADDR not supported on this platform.")
+        try:
+            udp_sock.bind(('0.0.0.0', BROADCAST_PORT))
+            print(f"Listening for broadcasts on port {BROADCAST_PORT}")
+        except Exception as e:
+            print(f"Failed to bind to broadcast port {BROADCAST_PORT}: {e}")
+            udp_sock.close()
+            return
         while True:
             data, addr = udp_sock.recvfrom(buffer_size)
             decoded_msg = data.decode()
