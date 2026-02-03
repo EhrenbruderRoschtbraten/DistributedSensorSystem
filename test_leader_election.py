@@ -62,7 +62,7 @@ def run_test():
     # Start peers with staggered timing
     print("\n[SETUP] Starting peers...")
     for pid in peer_labels:
-        address = Peer_utils.get_local_ip()
+        address = "127.0.0.1"
         port = Peer_utils.get_free_port()
         p = multiprocessing.Process(target=peer_process, args=(pid, address, port))
         p.daemon = True

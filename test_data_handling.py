@@ -107,7 +107,7 @@ def run_test():
 
     # Start peers (staggered)
     for pid in peer_labels:
-        address = Peer_utils.get_local_ip()
+        address = "127.0.0.1"
         port = Peer_utils.get_free_port()
         proc = multiprocessing.Process(target=peer_process, args=(pid, address, port))
         proc.daemon = True

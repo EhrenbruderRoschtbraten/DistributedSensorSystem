@@ -10,12 +10,14 @@ import struct
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from email import message
 from pathlib import Path
 from pydoc import text
 from typing import Any, Dict, List, Optional, Tuple
 
+from Peer_utils import get_broadcast_address
 BROADCAST_PORT = 9999  # Dedicated port for UDP broadcasts
 BROADCAST_IP = '127.0.0.1'
 
@@ -73,6 +75,12 @@ class Peer():
         self.incoming_queue = queue.PriorityQueue()
         self.expected_seq = 1
         self.delivered_messages = []
+        self.delivered_seq_set = set()
+        self.seen_seq = set()
+        self.sent_history = OrderedDict()
+        self.history_max = 1000
+        self.missing_seq_last_request = {}
+        self.missing_seq_retry_interval = 2.0
         self.multicast_thread_active = False
         self.view_id = 0  # To track changes in group view
         self.peer_last_heartbeat = {} # Map peer_id -> last_ack_time
@@ -89,6 +97,10 @@ class Peer():
         self.data_dir = Path.cwd() / "data" / self.peer_id
         # Per-connection TCP receive buffers for newline-framed messages
         self.conn_buffers = {}
+        # Broadcast IP derived from local address (fallback to localhost)
+        self.broadcast_ip = (
+            "127.0.0.1" if self.address.startswith("127.") else get_broadcast_address(self.address)
+        )
 
 
     def __str__(self) -> str:
@@ -106,13 +118,14 @@ class Peer():
         join the network via broadcast, and initializes heartbeat/election
         monitoring.
         """
+        print(f"Peer ID: {self.peer_id}")
         # Reset this peer's data directory at startup for clean runs
         try:
             self.reset_data_dir()
         except Exception as e:
             print(f"Failed to reset data dir on start: {e}")
         self.start_listening_threads()
-        self.broadcast_new_peer_request('127.0.0.1', 9999)
+        self.broadcast_new_peer_request(self.broadcast_ip, 9999)
         time_after_broadcast = time.time()
         #how does a peer know it has been added to the group?
         #maybe once it receives successor information from leader?
@@ -137,7 +150,7 @@ class Peer():
         #CONTINUE BROADCASTING UNTIL PART OF NETWORK OR DISCOVER ANOTHER PEER
         while not self.partOfNetwork:
             print("Waiting to join the network...")
-            self.broadcast_new_peer_request('127.0.0.1', 9999)
+            self.broadcast_new_peer_request(self.broadcast_ip, 9999)
             time.sleep(5)
         
         time.sleep(2)  # WAIT A BIT TO ENSURE STABILITY
@@ -229,6 +242,7 @@ class Peer():
                 # Correct order! Deliver it.
                 self.incoming_queue.get() 
                 self.delivered_messages.append(msg)
+                self.delivered_seq_set.add(seq_id)
                 print(f"  ==> [Node {self.peer_id}] Delivered #{seq_id}: {msg}")
                 try:
                     self.handle_ordered_payload(msg, seq_id)
@@ -237,6 +251,7 @@ class Peer():
                 self.expected_seq += 1
             else:
                 # Out of order! Gap detected. Wait for the missing message.
+                self.request_missing_seq(self.expected_seq)
                 break
 
     def connect(self) -> None:
@@ -337,6 +352,23 @@ class Peer():
         except Exception as e:
             print(f"[Error] Connection lost to {peer_key}. Cleaning up...")
             self.handle_peer_failure(peer_key) # Trigger cleanup logic
+
+    def request_missing_seq(self, seq_id: int) -> None:
+        """Request a missing sequence from the sequencer with backoff."""
+        if not self.sequencer_peer_id or self.sequencer_peer_id == self.peer_id:
+            return
+        if seq_id in self.delivered_seq_set or seq_id in self.seen_seq:
+            return
+        now = time.time()
+        last = self.missing_seq_last_request.get(seq_id, 0.0)
+        if now - last < self.missing_seq_retry_interval:
+            return
+        self.missing_seq_last_request[seq_id] = now
+        try:
+            self.ensure_connection(self.sequencer_peer_id)
+            self.send_message(self.sequencer_peer_id, f"MISSING_SEQ_REQUEST:{seq_id}")
+        except Exception as e:
+            print(f"Failed to request missing seq {seq_id} from sequencer: {e}")
 
     def receive_message(self, peer_key: str, buffer_size: int = 1024) -> None:
         """Continuously read and handle messages from a TCP peer.
@@ -496,6 +528,31 @@ class Peer():
                             self.expected_seq = max(self.expected_seq, final_seq + 1)
                         except Exception as e:
                             print(f"Failed to parse SEQ_SYNC_FINAL: {e}")
+                    elif message.startswith("MISSING_SEQ_REQUEST:"):
+                        if self.sequencer_peer_id == self.peer_id:
+                            try:
+                                req_seq = int(message.split("MISSING_SEQ_REQUEST:", 1)[1])
+                                payload = self.sent_history.get(req_seq)
+                                if payload is not None:
+                                    self.send_message(peer_key, f"MISSING_SEQ_RESPONSE:{req_seq}:{payload}")
+                                else:
+                                    self.send_message(peer_key, f"MISSING_SEQ_NOT_FOUND:{req_seq}")
+                            except Exception as e:
+                                print(f"Failed to handle MISSING_SEQ_REQUEST from {peer_key}: {e}")
+                    elif message.startswith("MISSING_SEQ_RESPONSE:"):
+                        try:
+                            rest = message.split("MISSING_SEQ_RESPONSE:", 1)[1]
+                            seq_str, payload = rest.split(":", 1)
+                            seq_id = int(seq_str)
+                            if seq_id not in self.delivered_seq_set and seq_id not in self.seen_seq:
+                                self.seen_seq.add(seq_id)
+                                self.incoming_queue.put((seq_id, payload))
+                                self.process_buffer()
+                        except Exception as e:
+                            print(f"Failed to parse MISSING_SEQ_RESPONSE: {e}")
+                    elif message.startswith("MISSING_SEQ_NOT_FOUND:"):
+                        # Sequencer doesn't have it (history evicted)
+                        pass
                     elif message == "VIEW_SYNC_REQUEST":
                         # Leader replies with the latest view
                         if self.isGroupLeader:
@@ -548,6 +605,15 @@ class Peer():
         if not self.multicast_socket:
             self.create_multicast_socket()
 
+
+        # Store for potential retransmission if we're the sequencer
+        try:
+            seq_id, payload = ordered_msg
+            self.sent_history[int(seq_id)] = payload
+            if len(self.sent_history) > self.history_max:
+                self.sent_history.popitem(last=False)
+        except Exception:
+            pass
 
         #construct message with metadata
         whole_message = {
@@ -629,7 +695,17 @@ class Peer():
             message_content = message["message"]
             from_peer = message["from"]
 
-            self.incoming_queue.put(message_content)
+            try:
+                seq_id, payload = message_content
+                seq_id = int(seq_id)
+            except Exception:
+                print(f"Malformed multicast message content: {message_content}")
+                continue
+
+            if seq_id in self.delivered_seq_set or seq_id in self.seen_seq:
+                continue
+            self.seen_seq.add(seq_id)
+            self.incoming_queue.put((seq_id, payload))
             self.process_buffer()
 
     # -------------------- Sensor Data (Mocked) --------------------
