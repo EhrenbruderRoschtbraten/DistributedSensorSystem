@@ -61,7 +61,7 @@ class Peer():
         self.leader_id = None
         self.last_leader_heartbeat = time.time()
         self.heartbeat_interval = 5  # seconds
-        self.heartbeat_timeout = 10  # seconds
+        self.heartbeat_timeout = 20  # seconds
         self.heartbeat_thread = None
         self.leader_check_thread = None
         self.pending_acks = {}
@@ -143,23 +143,23 @@ class Peer():
         if self.isGroupLeader:
             self.start_heartbeat_thread()
 
-        time.sleep(5)  # WAIT FOR THE OTHER PEERS TO SETTLE
+        # time.sleep(5)  # WAIT FOR THE OTHER PEERS TO SETTLE
 
         # If this peer self-assumed leadership (no election yet), set it as sequencer now
         if self.isGroupLeader and not self.sequencer_peer_id:
             print(f"Peer {self.peer_id} self-assumed leadership; announcing as coordinator/sequencer.")
             self.announce_coordinator()
 
-        if(self.peer_id == "peer1"):
-            self.send_message_to_sequencer("Hello from peer1")
+        # if(self.peer_id == "peer1"):
+        #     self.send_message_to_sequencer("Hello from peer1")
 
-        if(self.peer_id == "peer3"):
-            self.send_message_to_sequencer("Hello from peer3")
+        # if(self.peer_id == "peer3"):
+        #     self.send_message_to_sequencer("Hello from peer3")
 
-        if(self.peer_id == "peer2"):
-            self.send_message_to_sequencer("Hello from peer2")
+        # if(self.peer_id == "peer2"):
+        #     self.send_message_to_sequencer("Hello from peer2")
 
-        time.sleep(5)  # WAIT FOR MESSAGES TO BE PROCESSED
+        # time.sleep(5)  # WAIT FOR MESSAGES TO BE PROCESSED
 
         self.print_status()
         # Start mocked sensor thread once part of network and multicast ready
@@ -328,9 +328,11 @@ class Peer():
                 print(f"Sent to {peer_key}: {message}")
             else:
                 print(f"No connection found for {peer_key} while sending message only {self.connection_dict.keys()} available")
+                # self.handle_peer_failure(peer_key) # Clean up the group view
+                
         except Exception as e:
             print(f"[Error] Connection lost to {peer_key}. Cleaning up...")
-            # self.handle_peer_failure(peer_key) # Trigger cleanup logic
+            self.handle_peer_failure(peer_key) # Trigger cleanup logic
 
     def receive_message(self, peer_key: str, buffer_size: int = 1024) -> None:
         """Continuously read and handle messages from a TCP peer.
@@ -356,6 +358,10 @@ class Peer():
                         break
                 except Exception as e:
                     print(f"Connection error with {peer_key}: {e}")
+                    if isinstance(e, ConnectionResetError):
+                        print(f"[Network] Connection reset by {peer_key}. Initiating recovery.")
+                        self.handle_peer_failure(peer_key)
+                        break # Exit the thread gracefully
                     break
                 buffer += data.decode()
                 # Process complete newline-delimited messages
@@ -384,6 +390,7 @@ class Peer():
                         # Only accept heartbeats from the known leader
                         if peer_key == self.leader_id:
                             self.last_leader_heartbeat = time.time()
+                            print(f"Received HEARTBEAT from leader {peer_key} at {self.last_leader_heartbeat}")
                             self.send_message(peer_key, "HEARTBEAT_ACK")
                             # Ensure leader heartbeat monitoring is active
                             leader_thread = getattr(self, "leader_check_thread", None)
@@ -933,6 +940,13 @@ class Peer():
         Args:
             peer_id (str): UUID of the failed peer.
         """
+        if peer_id in self.connection_dict:
+            try:
+                self.connection_dict[peer_id].close()
+            except Exception as e:
+                print(f"Error closing connection to {peer_id}: {e}")
+            del self.connection_dict[peer_id]
+            
         if peer_id in self.groupView:
             del self.groupView[peer_id]
             if peer_id in self.peer_last_heartbeat:
