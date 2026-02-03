@@ -78,6 +78,10 @@ class Peer():
         self.peer_last_heartbeat = {} # Map peer_id -> last_ack_time
         self.election_timeout = 5
         self.received_ok = False
+        self.seq_sync_active = False
+        self.seq_sync_responses = {}
+        self.view_sync_inflight = False
+        self.failed_peers = set()
         # Sensor data config
         self.sensor_interval_seconds = 15
         self.sensor_thread = None
@@ -471,6 +475,39 @@ class Peer():
                         # Received OK from higher node
                         with self.lock:
                             self.received_ok = True
+                    elif message == "SEQ_SYNC_REQUEST":
+                        # Reply with last delivered sequence number
+                        last_seq = self._local_last_delivered_seq()
+                        try:
+                            self.send_message(peer_key, f"SEQ_SYNC_RESPONSE:{last_seq}")
+                        except Exception as e:
+                            print(f"Failed to send SEQ_SYNC_RESPONSE to {peer_key}: {e}")
+                    elif message.startswith("SEQ_SYNC_RESPONSE:"):
+                        if self.isGroupLeader and self.seq_sync_active:
+                            try:
+                                resp_seq = int(message.split("SEQ_SYNC_RESPONSE:", 1)[1])
+                                self.seq_sync_responses[peer_key] = resp_seq
+                            except Exception as e:
+                                print(f"Failed to parse SEQ_SYNC_RESPONSE from {peer_key}: {e}")
+                    elif message.startswith("SEQ_SYNC_FINAL:"):
+                        try:
+                            final_seq = int(message.split("SEQ_SYNC_FINAL:", 1)[1])
+                            # Ensure we don't move backwards
+                            self.expected_seq = max(self.expected_seq, final_seq + 1)
+                        except Exception as e:
+                            print(f"Failed to parse SEQ_SYNC_FINAL: {e}")
+                    elif message == "VIEW_SYNC_REQUEST":
+                        # Leader replies with the latest view
+                        if self.isGroupLeader:
+                            payload = {
+                                "ordered": self.orderedPeerList,
+                                "group": self.groupView,
+                                "view_id": self.view_id,
+                            }
+                            try:
+                                self.send_message(peer_key, f"VIEW_CHANGE_JSON:{json.dumps(payload)}")
+                            except Exception as e:
+                                print(f"Failed to send VIEW_SYNC response to {peer_key}: {e}")
                     elif message.startswith("COORDINATOR:"):
                         new_leader = message.split(":")[1]
                         print(f"Received COORDINATOR announcement: {new_leader}")
@@ -541,11 +578,15 @@ class Peer():
         #if self.view_id < new_view_id:
         print("Entering handle_view_change")
         if self.view_id < new_view_id:
+            if new_view_id > self.view_id + 1:
+                print(f"View gap detected: current={self.view_id}, received={new_view_id}. Requesting sync.")
+                self.request_view_sync()
             print(f"Received view change: {new_ordered_list}, {new_group_view}")
             self.orderedPeerList = new_ordered_list
             self.groupView = new_group_view
             print(f"Updated ordered peer list after VIEW_CHANGE: {self.orderedPeerList} and group view: {self.groupView}")
             self.view_id = new_view_id
+            self.view_sync_inflight = False
         else:
             print(f"Ignoring older view change with view ID {new_view_id}, current view ID is {self.view_id}")
 
@@ -720,10 +761,9 @@ class Peer():
     def create_multicast_threads(self):
         """Start multicast listener and processing threads.
 
-        Initializes the UDP multicast listener and launches a background
-        thread to receive and process multicast messages.
+        Launches a background thread to receive and process multicast
+        messages. The listener socket is created inside the thread.
         """
-        self.create_multicast_listener()
         multicast_thread = threading.Thread(target=self.listen_for_multicast_messages, daemon=True)
         multicast_thread.start()
         self.multicast_thread_active = True
@@ -882,6 +922,21 @@ class Peer():
                     except Exception as e:
                         print(f"Failed to send updated successor information to {peer_id}: {e}")
 
+    def request_view_sync(self) -> None:
+        """Ask the leader for the latest view if a gap is detected."""
+        if self.view_sync_inflight:
+            return
+        leader_id = self.leader_id or self.sequencer_peer_id
+        if not leader_id or leader_id == self.peer_id:
+            return
+        self.view_sync_inflight = True
+        try:
+            self.ensure_connection(leader_id)
+            self.send_message(leader_id, "VIEW_SYNC_REQUEST")
+        except Exception as e:
+            print(f"Failed to request VIEW_SYNC from {leader_id}: {e}")
+            self.view_sync_inflight = False
+
 
 
                                                
@@ -944,6 +999,10 @@ class Peer():
         Args:
             peer_id (str): UUID of the failed peer.
         """
+        if peer_id in self.failed_peers:
+            return
+        self.failed_peers.add(peer_id)
+
         if peer_id in self.connection_dict:
             try:
                 self.connection_dict[peer_id].close()
@@ -1124,6 +1183,50 @@ class Peer():
             # Defensive fallback in case of unexpected state.
             self.sequencer_sequence_number = getattr(self, "sequencer_sequence_number", 0)
 
+    def _local_last_delivered_seq(self) -> int:
+        """Return this peer's best-known last delivered sequence number."""
+        try:
+            return max(self.expected_seq - 1, 0)
+        except Exception:
+            return 0
+
+    def start_sequence_sync(self) -> None:
+        """Synchronize sequencer sequence number with peers after leadership change."""
+        if not self.isGroupLeader:
+            return
+        self.seq_sync_active = True
+        self.seq_sync_responses = {}
+        # Request last delivered seq from peers
+        for pid, info in list(self.groupView.items()):
+            if pid == self.peer_id:
+                continue
+            self.ensure_connection(pid)
+            try:
+                self.send_message(pid, "SEQ_SYNC_REQUEST")
+            except Exception as e:
+                print(f"Failed to send SEQ_SYNC_REQUEST to {pid}: {e}")
+        # Wait briefly for responses
+        start_wait = time.time()
+        while time.time() - start_wait < 1.5:
+            time.sleep(0.05)
+        # Compute max across responses and local state
+        max_seq = self._local_last_delivered_seq()
+        for _, seq in self.seq_sync_responses.items():
+            if seq > max_seq:
+                max_seq = seq
+        self.sequencer_sequence_number = max_seq
+        print(f"Sequencer sync complete. Using sequence #{max_seq} as last delivered.")
+        # Broadcast final chosen sequence number
+        for pid, info in list(self.groupView.items()):
+            if pid == self.peer_id:
+                continue
+            self.ensure_connection(pid)
+            try:
+                self.send_message(pid, f"SEQ_SYNC_FINAL:{max_seq}")
+            except Exception as e:
+                print(f"Failed to send SEQ_SYNC_FINAL to {pid}: {e}")
+        self.seq_sync_active = False
+
     def announce_coordinator(self) -> None:
         """Announce that this peer is the new coordinator/leader.
 
@@ -1158,3 +1261,5 @@ class Peer():
                 self.send_message(pid, message)
             except Exception as e:
                 print(f"Failed to send COORDINATOR via existing connection to {pid}: {e}")
+        # Sync sequencer sequence number after leadership change
+        self.start_sequence_sync()
