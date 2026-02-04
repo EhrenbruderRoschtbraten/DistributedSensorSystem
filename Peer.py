@@ -149,7 +149,7 @@ class Peer():
 
         #CONTINUE BROADCASTING UNTIL PART OF NETWORK OR DISCOVER ANOTHER PEER
         while not self.partOfNetwork:
-            print("Waiting to join the network...")
+            # print("Waiting to join the network...")
             self.broadcast_new_peer_request(self.broadcast_ip, 9999)
             time.sleep(5)
         
@@ -202,14 +202,14 @@ class Peer():
             message (str): Payload to be ordered (e.g., sensor data string).
         """
         if self.sequencer_peer_id == self.peer_id:
-            print(f"[Node {self.peer_id}] I am the sequencer, processing message directly: '{message}'")
+            # print(f"[Node {self.peer_id}] I am the sequencer, processing message directly: '{message}'")
             with self.lock:
                 self.sequencer_sequence_number += 1
                 ordered_msg = (self.sequencer_sequence_number, message)
                 self.multicast_message_to_group(ordered_msg, from_peer_id=self.peer_id)
             return
         else:
-            print(f"[Node {self.peer_id}] Sending: '{message}'")
+            # print(f"[Node {self.peer_id}] Sending: '{message}'")
             # In a real system, this goes to the sequencer first
             #wraps message with sequence number
             #send message to sequencer peer
@@ -220,7 +220,7 @@ class Peer():
                     if self.sequencer_peer_id not in self.connection_dict:
                         self.send_connection_request(peer_info['address'], peer_info['port'], self.sequencer_peer_id)
                     self.send_message(self.sequencer_peer_id, message)
-                    print(f"Sent sequencer request to {self.sequencer_peer_id}: {message}")
+                    # print(f"Sent sequencer request to {self.sequencer_peer_id}: {message}")
                 except Exception as e:
                         print(f"Failed to send updated successor information to {self.sequencer_peer_id}: {e}")
             else:
@@ -261,7 +261,7 @@ class Peer():
             This method currently only prints a message and does not
             initiate a network connection.
         """
-        print(f"Connecting to Peer {self.peer_id} at {self.address}:{self.port}")   
+        # print(f"Connecting to Peer {self.peer_id} at {self.address}:{self.port}")   
 
     def create_listening_socket(self) -> socket.socket:
         """Create a TCP listening socket bound to this peer's port.
@@ -344,7 +344,7 @@ class Peer():
                 if not message.endswith("\n"):
                     message = message + "\n"
                 conn.sendall(message.encode())
-                print(f"Sent to {peer_key}: {message}")
+                # print(f"Sent to {peer_key}: {message}")
             else:
                 print(f"No connection found for {peer_key} while sending message only {self.connection_dict.keys()} available")
                 # self.handle_peer_failure(peer_key) # Clean up the group view
@@ -381,7 +381,7 @@ class Peer():
             peer_key (str): The remote peer's ID.
             buffer_size (int, optional): Read buffer size. Defaults to 1024.
         """
-        print(f"Receive thread started for {peer_key}")
+        # print(f"Receive thread started for {peer_key}")
         if peer_key in self.connection_dict:
             conn = self.connection_dict[peer_key]
             # Retrieve or initialize buffer for this connection
@@ -406,7 +406,7 @@ class Peer():
                     message = line.strip()
                     if not message:
                         continue
-                    print(f"Received from {peer_key}: {message}")
+                    # print(f"Received from {peer_key}: {message}")
                     if message.startswith("SUCCESSOR_INFORMATION:"):
                         parts = message.split("SUCCESSOR_INFORMATION:")[1].split(":", 1)
                         successor_list_str = parts[0]
@@ -426,7 +426,7 @@ class Peer():
                         # Only accept heartbeats from the known leader
                         if peer_key == self.leader_id:
                             self.last_leader_heartbeat = time.time()
-                            print(f"Received HEARTBEAT from leader {peer_key} at {self.last_leader_heartbeat}")
+                            # print(f"Received HEARTBEAT from leader {peer_key} at {self.last_leader_heartbeat}")
                             self.send_message(peer_key, "HEARTBEAT_ACK")
                             # Ensure leader heartbeat monitoring is active
                             leader_thread = getattr(self, "leader_check_thread", None)
@@ -442,7 +442,7 @@ class Peer():
                                 self.start_bully_election()
                     elif message == "HEARTBEAT_ACK":
                         # Leader received ack, update timestamp
-                        print(f"Received HEARTBEAT_ACK from {peer_key}")
+                        # print(f"Received HEARTBEAT_ACK from {peer_key}")
                         self.peer_last_heartbeat[peer_key] = time.time()
                     elif message.startswith("VIEW_CHANGE_JSON:"):
                         try:
@@ -451,7 +451,7 @@ class Peer():
                             new_ordered_list = payload.get("ordered", [])
                             new_group_view = payload.get("group", {})
                             new_view_id = int(payload.get("view_id", 0))
-                            print(f"Parsed VIEW_CHANGE_JSON - Ordered: {new_ordered_list}, ViewID: {new_view_id}")
+                            # print(f"Parsed VIEW_CHANGE_JSON - Ordered: {new_ordered_list}, ViewID: {new_view_id}")
                             self.handle_view_change(new_ordered_list, new_group_view, new_view_id)
                         except Exception as e:
                             print(f"Failed to parse VIEW_CHANGE_JSON: {e}")
@@ -495,7 +495,7 @@ class Peer():
                         else:
                             # Handle sequencer request
                             original_msg = message.split("SEQUENCER_REQUEST:")[1]
-                            print(f"Sequencer request received: {original_msg}")
+                            # print(f"Sequencer request received: {original_msg}")
                             with self.lock:
                                 self.sequencer_sequence_number += 1
                                 ordered_msg = (self.sequencer_sequence_number, original_msg)
@@ -627,13 +627,13 @@ class Peer():
             "from": from_peer_id
         }
 
-        print(f"Multicasting message to group chat: {whole_message}")
+        # print(f"Multicasting message to group chat: {whole_message}")
         # multicast the message with metadata
         #ip multicast syntax
 
         try:
             self.multicast_socket.sendto(json.dumps(whole_message).encode(), (MCAST_GRP, MCAST_PORT))
-            print(f"Multicast message sent: {whole_message}")
+            # print(f"Multicast message sent: {whole_message}")
         except Exception as e:
             print(f"Failed to send multicast message: {e}")
         
@@ -647,7 +647,7 @@ class Peer():
             new_view_id (int): Monotonic view identifier.
         """
         #if self.view_id < new_view_id:
-        print("Entering handle_view_change")
+        # print("Entering handle_view_change")
         if self.view_id < new_view_id:
             if new_view_id > self.view_id + 1:
                 print(f"View gap detected: current={self.view_id}, received={new_view_id}. Requesting sync.")
@@ -659,7 +659,8 @@ class Peer():
             self.view_id = new_view_id
             self.view_sync_inflight = False
         else:
-            print(f"Ignoring older view change with view ID {new_view_id}, current view ID is {self.view_id}")
+            # print(f"Ignoring older view change with view ID {new_view_id}, current view ID is {self.view_id}")
+            pass
 
     def create_multicast_listener(self) -> socket.socket:
         """Create and configure a UDP multicast listener socket.
@@ -695,7 +696,7 @@ class Peer():
         while True:
             data, addr = sock.recvfrom(4096)
             message = json.loads(data.decode())
-            print(f"Received multicast message at {self.peer_id} from {addr}: {message}")
+            # print(f"Received multicast message at {self.peer_id} from {addr}: {message}")
             #process message here
             #how to extract metadata from message?
             message_content = message["message"]
@@ -809,15 +810,35 @@ class Peer():
             seq_id (int): Ordered sequence number.
         """
         # One CSV per sensor in this peer's directory (replicated across peers)
-        file_path = self.data_dir / f"{sensor_id}.csv"
-        file_exists = file_path.exists()
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            with open(file_path, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
+            # Append to a text file with ASCII box formatting
+            file_path = self.data_dir / f"{sensor_id}.txt"
+            file_exists = file_path.exists()
+            
+            with open(file_path, mode='a', encoding='utf-8') as f:
+                # Define column widths
+                w_seq = 10
+                w_ts = 25
+                w_id = 38
+                w_temp = 10
+                w_hum = 10
+                w_pres = 12
+                
+                # Separator line
+                sep = f"+{'-'*w_seq}+{'-'*w_ts}+{'-'*w_id}+{'-'*w_temp}+{'-'*w_hum}+{'-'*w_pres}+\n"
+                
                 if not file_exists:
-                    writer.writerow(["sequence", "timestamp", "sensor_id", "temperature_c", "humidity_pct", "pressure_hpa"]) 
-                writer.writerow([seq_id, ts, sensor_id, temp, hum, pres])
+                    # Write header
+                    f.write(sep)
+                    header = f"|{'SEQUENCE'.center(w_seq)}|{'TIMESTAMP'.center(w_ts)}|{'SENSOR ID'.center(w_id)}|{'TEMP(C)'.center(w_temp)}|{'HUM(%)'.center(w_hum)}|{'PRES(hPa)'.center(w_pres)}|\n"
+                    f.write(header)
+                    f.write(sep)
+                
+                # Write data row
+                row = f"|{str(seq_id).center(w_seq)}|{ts.center(w_ts)}|{sensor_id.center(w_id)}|{str(temp).center(w_temp)}|{str(hum).center(w_hum)}|{str(pres).center(w_pres)}|\n"
+                f.write(row)
+                f.write(sep)
         except Exception as e:
             print(f"Failed to write CSV for {sensor_id}: {e}")
 
@@ -892,7 +913,7 @@ class Peer():
         message = f"{message}:{self.peer_id}:{self.port}"
         try:
             udp_sock.sendto(message.encode(), (broadcast_ip, broadcast_port))
-            print(f"Broadcasted new peer request to {broadcast_ip}:{broadcast_port}")
+            # print(f"Broadcasted new peer request to {broadcast_ip}:{broadcast_port}")
         except Exception as e:
             print(f"Failed to broadcast to {broadcast_ip}:{broadcast_port}: {e}")
         udp_sock.close()
@@ -913,7 +934,7 @@ class Peer():
             print("Warning: SO_REUSEADDR not supported on this platform.")
         try:
             udp_sock.bind(('0.0.0.0', BROADCAST_PORT))
-            print(f"Listening for broadcasts on port {BROADCAST_PORT}")
+            # print(f"Listening for broadcasts on port {BROADCAST_PORT}")
         except Exception as e:
             print(f"Failed to bind to broadcast port {BROADCAST_PORT}: {e}")
             udp_sock.close()
@@ -924,7 +945,10 @@ class Peer():
             parts = decoded_msg.split(":")
             new_peer_id = parts[1]
             peer_port = int(parts[2])
-            print(f"Received broadcast from {addr}: {parts[0]} with Peer ID {new_peer_id} on port {peer_port}")
+            parts = decoded_msg.split(":")
+            new_peer_id = parts[1]
+            peer_port = int(parts[2])
+            # print(f"Received broadcast from {addr}: {parts[0]} with Peer ID {new_peer_id} on port {peer_port}")
             # Process the broadcast message as needed
             # For example, add the new peer to the group view
 
