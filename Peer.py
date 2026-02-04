@@ -593,6 +593,11 @@ class Peer():
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        # Bind to the specific interface for sending multicast to ensure it goes out the right way
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.address))
+        except Exception as e:
+            print(f"Warning: Could not set IP_MULTICAST_IF to {self.address}: {e}")
         self.multicast_socket = sock
 
     def multicast_message_to_group(self, ordered_msg: Tuple[int, Any], from_peer_id: str) -> None:
@@ -671,10 +676,11 @@ class Peer():
         else:
             print("Warning: SO_REUSEPORT not supported on this platform.")
         sock.bind(('', MCAST_PORT))
+        # Use the explicit local IP to join the multicast group on the correct interface
         mreq = struct.pack(
-            "4sl",
+            "4s4s",
             socket.inet_aton(MCAST_GRP),
-            socket.INADDR_ANY
+            socket.inet_aton(self.address)
         )
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         return sock
@@ -882,10 +888,13 @@ class Peer():
             message (str, optional): Request type. Defaults to "NEW_PEER_REQUEST".
         """
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Don't set SO_BROADCAST for localhost - send directly to 127.0.0.1
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         message = f"{message}:{self.peer_id}:{self.port}"
-        udp_sock.sendto(message.encode(), (broadcast_ip, broadcast_port))
-        print(f"Broadcasted new peer request to {broadcast_ip}:{broadcast_port}")
+        try:
+            udp_sock.sendto(message.encode(), (broadcast_ip, broadcast_port))
+            print(f"Broadcasted new peer request to {broadcast_ip}:{broadcast_port}")
+        except Exception as e:
+            print(f"Failed to broadcast to {broadcast_ip}:{broadcast_port}: {e}")
         udp_sock.close()
 
     def listen_for_broadcasts(self, buffer_size=1024):
