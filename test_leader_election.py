@@ -41,7 +41,7 @@ def read_log(path):
 def extract_internal_id(content):
     """Extract peer UUID from log."""
     for line in content.splitlines():
-        if line.startswith("Peer ID:"):
+        if "Peer ID:" in line:
             return line.split("Peer ID:", 1)[1].strip()
     return None
 

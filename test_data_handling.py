@@ -80,7 +80,7 @@ def extract_internal_id(content: str) -> str | None:
         str | None: Extracted UUID string, if present.
     """
     for line in content.splitlines():
-        if line.startswith("Peer ID:"):
+        if "Peer ID:" in line:
             return line.split("Peer ID:", 1)[1].strip()
     return None
 
