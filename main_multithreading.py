@@ -1,65 +1,96 @@
-import Peer
+"""Launch multiple peers in separate processes for local testing.
+
+This script starts three peers with auto-generated UUIDs and staggers their
+startup to reduce contention.
+"""
+
 import multiprocessing
-import socket
 import time
-import identity
+
+import Peer
+import Peer_utils
 
 
 #initialize two peers
 #start peer1 listening socket in a separate process
-def peer1stuff(peer1):
-        # peer1.send_message(f"peer_5002","Hello from Peer 1")
-        # peer1.listen_for_broadcasts(6000)
+def peer1stuff(peer1address, peer1port):
+    """Run a peer instance in the current process.
 
-        # peer1.start_listening_threads()
-        # time.sleep(2)  # Give peer2 time to start listening
-        # peer1.broadcast_new_peer_request('127.0.0.1', 9999, f"NEW_PEER_REQUEST:{peer1.peer_id}")
-        # time.sleep(5)
-        # peer1.broadcast_new_peer_request('127.0.0.1', 9999, "Another broadcast")
+    Args:
+        peer1address (str): Local IP address for the peer.
+        peer1port (int): TCP port for the peer's server socket.
+    """
+    peer1 = Peer.Peer(address=peer1address, port=peer1port)
+    peer1.start()
 
-        peer1.start()
 
         
 
 
 
 #start peer2 listening socket in a separate process
-def peer2stuff(peer2):
-        # peer2.start_listening_threads()
-        # time.sleep(10)  # Keep process alive to receive broadcasts
+def peer2stuff(peer2address, peer2port):
+    """Run a second peer instance in the current process.
 
-        # print("now sending connection request from peer2 to peer1")
-        #RESOURCE DISCOVERY FIRST
-        #HEARING FOR BROADCAST REQUESTS
+    Args:
+        peer2address (str): Local IP address for the peer.
+        peer2port (int): TCP port for the peer's server socket.
+    """
+    peer2 = Peer.Peer(address=peer2address, port=peer2port)
+    peer2.start()
 
-        # peer2.send_connection_request('127.0.0.1', 5001)
-        # peer2.send_message(f"peer_5001","Hello from Peer 2")
-        # peer2.receive_message(f"peer_5001")
-        # peer2.broadcast_new_peer_request('255.255.255.255', 6000, "New peer joined the network")
+#start peer2 listening socket in a separate process
+def peer3stuff(peer3address, peer3port):
+    """Run a third peer instance in the current process.
 
-        peer2.start()
+    Args:
+        peer3address (str): Local IP address for the peer.
+        peer3port (int): TCP port for the peer's server socket.
+    """
+    peer3 = Peer.Peer(address=peer3address, port=peer3port)
+    peer3.start()
+
 
 if __name__ == '__main__':
-    
-    path1 = "peer1_identity/peer1_identity.txt"
-    peer_id1 = identity.load_or_generate_peer_id(PEER_ID_FILE=path1)
-    peer1 = Peer.Peer(peer_id=peer_id1, address='127.0.0.1', port=5001)
 
-    path2 = "peer2_identity/peer2_identity.txt"
-    peer_id2 = identity.load_or_generate_peer_id(PEER_ID_FILE=path2)
-    peer2 = Peer.Peer(peer_id=peer_id2, address='127.0.0.1', port=5002)
+    peer1address = Peer_utils.get_local_ip()
+    peer1port = Peer_utils.get_free_port()
+     
+    peer2address = Peer_utils.get_local_ip()
+    peer2port = Peer_utils.get_free_port()
 
+    peer3address = Peer_utils.get_local_ip()
+    peer3port = Peer_utils.get_free_port()
+        
+    process1 = multiprocessing.Process(
+        target=peer1stuff,
+        args=(peer1address, peer1port)
+    )
+    process1.daemon = True
 
-    process1 = multiprocessing.Process(target=peer1stuff,args=(peer1,))
-    process2 = multiprocessing.Process(target=peer2stuff,args=(peer2,))
+    process2 = multiprocessing.Process(
+        target=peer2stuff,
+        args=(peer2address, peer2port)
+    )
+    process2.daemon = True
+
+    process3 = multiprocessing.Process(
+        target=peer3stuff,
+        args=(peer3address, peer3port)
+    )
+    process3.daemon = True
 
     process2.start()
+    time.sleep(5)  # Ensure peer2 starts before peer1
     process1.start()
+    time.sleep(5)  # Ensure peer1 starts before peer3
+    process3.start()
+
 
 
     process2.join()
     process1.join()
-
+    process3.join()
 
     
 
